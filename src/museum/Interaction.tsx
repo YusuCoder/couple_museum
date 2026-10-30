@@ -9,8 +9,8 @@ import { openNearDoor } from './Doors'
 import { ROTUNDA, SHAPES } from './floorplan'
 import { playerState, thirdPersonPose } from './Player'
 import { rigs } from './embrace'
-import { partnerState } from './Partner'
 import { sitDown, standUp } from './Seats'
+import { remotes } from './presence'
 import { romance } from './Skylight'
 import { exhibitRegistry, occluders, useMuseum, type ExhibitHandle } from './store'
 import { controlling, isTouch, stick } from './touch'
@@ -316,5 +316,5 @@ export function Interaction() {
 
 // Dev-only handle for scripted testing (headless browsers can't pointer-lock)
 if (import.meta.env.DEV) {
-  Object.assign(window, { __museum: { useMuseum, sitDown, standUp, partnerState, romance, rigs, enterView, exitView, stepView, exhibitRegistry, openGate, openNearDoor, playerState, getCamera: () => camera } })
+  Object.assign(window, { __museum: { useMuseum, sitDown, standUp, romance, remotes, rigs, enterView, exitView, stepView, exhibitRegistry, openGate, openNearDoor, playerState, getCamera: () => camera } })
 }

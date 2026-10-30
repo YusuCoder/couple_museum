@@ -118,6 +118,19 @@ export function Hud() {
   const nearSeat = useMuseum((s) => s.nearSeat)
   const exhibits = useMuseum((s) => s.exhibits)
   const names = useMuseum((s) => s.names)
+  const me = useMuseum((s) => s.me)
+  const partnerHere = useMuseum((s) => s.partnerHere)
+  const link = useMuseum((s) => s.link)
+  const other = me === 'him' ? 'she' : 'he'
+  const together = partnerHere
+    ? `♥ ${me === 'him' ? 'She’s' : 'He’s'} here with you`
+    : link.state === 'live'
+      ? `Waiting for ${me === 'him' ? 'her' : 'him'} — ${other}’ll appear as soon as ${other} opens the museum`
+      : link.state === 'failed'
+        ? `Walking alone: couldn’t connect to walk together (${link.why})`
+        : link.state === 'device'
+          ? 'Walking alone: open the museum signed in (or from your link) to walk together'
+          : 'Connecting…'
   const byId = new Map(exhibits.map((e) => [e.id, e]))
 
   if (mode === 'intro') {
@@ -145,6 +158,7 @@ export function Hud() {
       <div className="overlay overlay--paused" onClick={lockPointer}>
         <p className="paused-title">Paused</p>
         <p>{isTouch ? 'Tap anywhere' : 'Click anywhere'} to continue walking</p>
+        <p className="together-status">{together}</p>
         <button
           className="chip"
           onClick={(e) => {
@@ -198,6 +212,8 @@ export function Hud() {
   return (
     <>
       {mode !== 'sitting' && <div className={`crosshair${focusedId ? ' crosshair--focus' : ''}`} />}
+      {partnerHere && <div className="together-pill">{together}</div>}
+      {link.state === 'failed' && <div className="together-pill together-pill--alone">Walking alone · couldn’t connect</div>}
       {mode === 'walking' && !focusedId && !nearDoor && !nearGate && nearSeat && (
         <Prompt title="Sit down" action="" onTap={interact} />
       )}

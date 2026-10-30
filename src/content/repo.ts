@@ -215,10 +215,16 @@ export function cloudRepo(museumId: string): Repo {
 
 /** The museum to show right now: the account's when signed in, else this device's. */
 export async function currentRepo(): Promise<Repo> {
-  if (!supabase) return localRepo
+  return (await currentPlace()).repo
+}
+
+/** The museum to show, plus (online) which museum and who is looking — for walking it together. */
+export async function currentPlace(): Promise<{ repo: Repo; museum: CloudMuseum | null }> {
+  if (!supabase) return { repo: localRepo, museum: null }
   const { data } = await supabase.auth.getSession()
-  if (!data.session) return localRepo
-  return cloudRepo((await resolveCloudMuseum()).id)
+  if (!data.session) return { repo: localRepo, museum: null }
+  const museum = await resolveCloudMuseum()
+  return { repo: cloudRepo(museum.id), museum }
 }
 
 export interface CloudMuseum {
@@ -228,6 +234,9 @@ export interface CloudMuseum {
   visitCode?: string
   /** The couple: owner and partner (visitors from the visit link aren't counted). */
   members: number
+  /** Who is signed in, and how they belong to this museum. */
+  userId: string
+  role: 'owner' | 'partner' | 'guest'
   /** The invite link couldn't be used (expired, museum full…): shown to the user, who carries on in their own museum. */
   joinProblem?: string
 }
@@ -287,7 +296,7 @@ async function findOrCreateMuseum(joinCode?: string | null): Promise<CloudMuseum
     else museumId = data.id as string
   }
 
-  const [{ data: m, error: e3 }, { count }] = await Promise.all([
+  const [{ data: m, error: e3 }, { count }, { data: me }] = await Promise.all([
     // '*': works before and after the visit-links migration (visit_code)
     db.from('museums').select('*').eq('id', museumId).single(),
     db
@@ -295,6 +304,7 @@ async function findOrCreateMuseum(joinCode?: string | null): Promise<CloudMuseum
       .select('user_id', { count: 'exact', head: true })
       .eq('museum_id', museumId)
       .in('role', ['owner', 'partner']),
+    db.from('museum_members').select('role').eq('museum_id', museumId).eq('user_id', uid).maybeSingle(),
   ])
   if (e3) throw e3
   return {
@@ -302,6 +312,8 @@ async function findOrCreateMuseum(joinCode?: string | null): Promise<CloudMuseum
     inviteCode: m.invite_code as string,
     visitCode: (m.visit_code as string | undefined) ?? undefined,
     members: count ?? 1,
+    userId: uid,
+    role: (me?.role as CloudMuseum['role'] | undefined) ?? (m.owner_id === uid ? 'owner' : 'guest'),
     joinProblem,
   }
 }

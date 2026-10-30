@@ -45,6 +45,8 @@ export const playerState = {
   ...makeBody(),
   /** Move the body to this spot (and, if given, face this way: yaw, radians). */
   teleport: null as null | { x: number; z: number; yaw?: number },
+  /** Walk to this spot by itself (the embrace: she steps in close); any movement input cancels it. */
+  steer: null as null | { x: number; z: number },
   /** Height the third-person camera must stay under (current room's ceiling, or open sky). */
   ceiling: 6,
 }
@@ -149,7 +151,19 @@ export function Player({ spawn }: { spawn: [number, number] }) {
           wish.multiplyScalar(push >= RUN_PUSH ? RUN : WALK * Math.max(push / RUN_PUSH, 0.45))
         }
       }
-    }
+      // Walking somewhere by itself until the visitor moves
+      const goal = playerState.steer
+      if (goal && wish.lengthSq() > 0) playerState.steer = null
+      else if (goal) {
+        const here = rb.translation()
+        wish.set(goal.x - here.x, 0, goal.z - here.z)
+        const d = wish.length()
+        if (d < 0.04) {
+          wish.set(0, 0, 0)
+          playerState.steer = null
+        } else wish.multiplyScalar(Math.min(WALK * 0.7, d * 2.2 + 0.15) / d)
+      }
+    } else playerState.steer = null
 
     // Eased acceleration/deceleration instead of instant start/stop
     velocity.current.lerp(wish, 1 - Math.exp(-dt * (wish.lengthSq() > 0 ? 6 : 9)))

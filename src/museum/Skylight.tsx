@@ -35,6 +35,8 @@ export const romance = {
   inside: new Set<object>(),
   /** Centre (on the floor) of the circle being stood in: where the spotlight falls. */
   centre: new THREE.Vector3(),
+  /** That circle's radius (m). */
+  radius: 0,
   /** Seconds to dim fully, and to come back up. */
   dimSeconds: 4.5,
   brightenSeconds: 2.5,
@@ -57,6 +59,7 @@ export function Romance({ radius, dome }: { radius: number; dome: THREE.MeshStan
     if (Math.hypot(p.x - centre.x, p.z - centre.z) < radius) {
       romance.inside.add(key)
       romance.centre.copy(centre)
+      romance.radius = radius
     } else romance.inside.delete(key)
     dome.emissiveIntensity = base * (1 - 0.72 * romanceLevel())
   })

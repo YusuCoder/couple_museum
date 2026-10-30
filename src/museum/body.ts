@@ -5,7 +5,7 @@ import type { Seat } from './Seats'
 /**
  * Everything an Avatar needs to know about the body it dresses, and what it
  * reports back. The visitor's body (playerState) and the companion's
- * (partnerState) both have this shape.
+ * (someone else walking with them) both have this shape.
  */
 export interface Body {
   /** Capsule centre. */

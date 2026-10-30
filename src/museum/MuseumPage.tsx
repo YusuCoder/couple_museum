@@ -6,7 +6,7 @@ import { Physics } from '@react-three/rapier'
 
 import { blobKey } from '../content/db'
 import { layoutBuilding } from '../content/layout'
-import { currentRepo } from '../content/repo'
+import { currentPlace } from '../content/repo'
 import { audio } from './audio'
 import { SPAWN_OUTSIDE } from './floorplan'
 import { Building } from './Building'
@@ -16,18 +16,23 @@ import { Character } from './Character'
 import { Effects } from './Effects'
 import { Hud } from './Hud'
 import { Interaction } from './Interaction'
-import { Partner } from './Partner'
 import { SeatWatcher } from './Seats'
 import { KEYMAP, Player } from './Player'
 import { useMuseum } from './store'
 import { isTouch } from './touch'
+import { Together } from './Together'
 
 /**
  * Loads the couple's museum (their account when signed in, else this device),
  * or the demo when it's empty / ?demo is set, and hangs it.
  */
-function useMuseumContent(demo: boolean) {
+/** This device / demo: a fresh id per tab, so two tabs can walk together; `?as=her` walks as her. */
+const LOCAL_ID = crypto.randomUUID()
+
+function useMuseumContent(demo: boolean, asHer: boolean) {
   const [ready, setReady] = useState(false)
+  /** Who is walking, and in which museum's channel (null: this device's tabs). */
+  const [together, setTogether] = useState<{ museumId: string | null; myId: string }>({ museumId: null, myId: LOCAL_ID })
 
   useEffect(() => {
     let cancelled = false
@@ -44,14 +49,24 @@ function useMuseumContent(demo: boolean) {
     })
 
     void (async () => {
-      const stored = demo
+      const place = demo
         ? null
-        : await currentRepo()
-            .then((r) => r.load())
-            .catch((e) => {
-              console.error('Could not load museum, showing demo', e)
-              return null
-            })
+        : await currentPlace().catch((e) => {
+            console.error('Could not load museum, showing demo', e)
+            return null
+          })
+      const stored = place
+        ? await place.repo.load().catch((e) => {
+            console.error('Could not load museum, showing demo', e)
+            return null
+          })
+        : null
+      // The museum's owner walks as him; whoever they shared it with, as her
+      const cloud = place?.museum
+      if (!cancelled) {
+        set({ me: cloud ? (cloud.role === 'owner' ? 'him' : 'her') : asHer ? 'her' : 'him' })
+        setTogether(cloud ? { museumId: cloud.id, myId: cloud.userId } : { museumId: null, myId: LOCAL_ID })
+      }
       let content = { rooms: DEMO_ROOMS, names: 'Aziz & Malika', since: '2021' }
       let track: string | null = null
 
@@ -81,19 +96,22 @@ function useMuseumContent(demo: boolean) {
       if (document.pointerLockElement) document.exitPointerLock()
       created.forEach((u) => URL.revokeObjectURL(u))
     }
-  }, [demo])
+  }, [demo, asHer])
 
-  return ready
+  return { ready, together }
 }
 
 export default function MuseumPage() {
   const [params] = useSearchParams()
-  const ready = useMuseumContent(params.has('demo'))
+  const { ready, together } = useMuseumContent(params.has('demo'), params.get('as') === 'her')
 
   // Optional ?view=x,z,yawDeg — handy for screenshots and debugging
   const view = params.get('view')?.split(',').map(Number)
   // Visitors arrive on the plaza, facing the front door
-  const spawn: [number, number] = view ? [view[0], view[1]] : SPAWN_OUTSIDE
+  // She arrives a step to his left, so the two never start inside each other
+  const me = useMuseum((s) => s.me)
+  const base: [number, number] = view ? [view[0], view[1]] : SPAWN_OUTSIDE
+  const spawn: [number, number] = me === 'her' ? [base[0] - 0.9, base[1]] : base
   const yaw = view?.[2] ? (view[2] * Math.PI) / 180 : 0
 
   const quality = useMuseum((s) => s.quality)
@@ -116,9 +134,9 @@ export default function MuseumPage() {
             <Physics gravity={[0, -9.81, 0]}>
               <Building />
               <Player spawn={spawn} />
-              <Partner spawn={spawn} yaw={yaw} />
             </Physics>
             <Character />
+            <Together museumId={together.museumId} myId={together.myId} />
             <Effects />
           </Suspense>
           <Interaction />

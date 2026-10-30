@@ -48,6 +48,12 @@ interface MuseumState {
   /** Couple names and year for the title wall. */
   names: string
   since: string
+  /** Which of the couple this visitor walks as (the museum's owner is him; anyone they share it with, her). */
+  me: 'him' | 'her'
+  /** The other one is in the museum right now (walking together). */
+  partnerHere: boolean
+  /** The walking-together link: live, still connecting, this device only, or failed (with why). */
+  link: { state: 'connecting' | 'live' | 'device' | 'failed'; why?: string }
   set: (s: Partial<Omit<MuseumState, 'set'>>) => void
 }
 
@@ -67,6 +73,9 @@ export const useMuseum = create<MuseumState>((set) => ({
   nearSeat: false,
   names: 'Aziz & Malika',
   since: '2021',
+  me: 'him',
+  partnerHere: false,
+  link: { state: 'connecting' },
   set,
 }))
 

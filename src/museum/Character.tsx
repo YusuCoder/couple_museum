@@ -38,6 +38,8 @@ const _dir = new THREE.Vector3()
 interface AvatarProps {
   url: string
   who: 'him' | 'her'
+  /** This visitor's own figure (starts facing where the camera looks), not someone else's. */
+  local: boolean
   /** Metres; the model is rescaled to this. */
   height: number
   body: Body
@@ -79,7 +81,7 @@ function rebaseBenchClips(clips: THREE.AnimationClip[]) {
   }
 }
 
-export function Avatar({ url, who, height, body, walkClip, walkSpeed, runSpeed, visible, onStood }: AvatarProps) {
+export function Avatar({ url, who, local, height, body, walkClip, walkSpeed, runSpeed, visible, onStood }: AvatarProps) {
   const { scene, animations } = useGLTF(url)
   const root = useRef<THREE.Group>(null)
   const camera = useThree((s) => s.camera)
@@ -179,7 +181,7 @@ export function Avatar({ url, who, height, body, walkClip, walkSpeed, runSpeed, 
     }
     if (yaw.current === null) {
       camera.getWorldDirection(_dir)
-      yaw.current = who === 'him' ? Math.atan2(_dir.x, _dir.z) : body.yaw
+      yaw.current = local ? Math.atan2(_dir.x, _dir.z) : body.yaw
     }
     const speed = seat ? 0 : Math.hypot(v.x, v.z)
     const moving = speed > 0.15
@@ -241,17 +243,22 @@ export function Avatar({ url, who, height, body, walkClip, walkSpeed, runSpeed, 
   )
 }
 
-/** The visitor. */
+/** Each of the couple's models and how it moves. */
+export const MODELS = {
+  him: { url: HIM, height: 1.78, walkClip: 'Walk', walkSpeed: 1.64, runSpeed: 4.65 },
+  her: { url: HER, height: 1.68, walkClip: 'DwarfWalk', walkSpeed: 1.42, runSpeed: 3.08 },
+}
+
+/** The visitor: him or her, whichever this visitor walks as. */
 export function Character() {
+  const me = useMuseum((s) => s.me)
   return (
     <Avatar
-      url={HIM}
-      who="him"
-      height={1.78}
+      key={me}
+      {...MODELS[me]}
+      who={me}
+      local
       body={playerState}
-      walkClip="Walk"
-      walkSpeed={1.64}
-      runSpeed={4.65}
       onStood={finishStanding}
       visible={(camera, h) => {
         const { view, mode } = useMuseum.getState()
@@ -262,8 +269,6 @@ export function Character() {
   )
 }
 
-/** Her model and how it moves (see Partner). */
-export const HER_MODEL = { url: HER, height: 1.68, walkClip: 'DwarfWalk', walkSpeed: 1.42, runSpeed: 3.08 }
 
 /** Face shapes the model carries (morph targets on the head and lashes). */
 function useFace(model: THREE.Object3D) {
