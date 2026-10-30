@@ -276,11 +276,15 @@ class AudioEngine {
     this.roomToneGain?.gain.setTargetAtTime(0.05 * (1 - f), t, 0.3)
   }
 
-  /** A door swinging shut on its closer: a soft double thud and the latch. */
-  doorClose() {
-    if (!this.started) return
+  /** A door swinging shut on its closer: a soft double thud and the latch. `volume`: quieter when it's further away. */
+  doorClose(volume = 1) {
+    if (!this.started || volume < 0.02) return
     const ctx = this.ctx
     const t = ctx.currentTime
+    const out = ctx.createGain()
+    out.gain.value = volume
+    out.connect(this.listener.getInput())
+    out.connect(this.reverbIn)
     for (const [at, gain] of [
       [0, 0.45],
       [0.09, 0.2],
@@ -292,9 +296,7 @@ class AudioEngine {
       g.gain.setValueAtTime(0, t + at)
       g.gain.linearRampToValueAtTime(gain, t + at + 0.008)
       g.gain.exponentialRampToValueAtTime(0.001, t + at + 0.3)
-      thud.connect(g)
-      g.connect(this.listener.getInput())
-      g.connect(this.reverbIn)
+      thud.connect(g).connect(out)
       thud.start(t + at)
       thud.stop(t + at + 0.35)
     }
@@ -309,7 +311,7 @@ class AudioEngine {
     lg.gain.setValueAtTime(0, t + 0.05)
     lg.gain.linearRampToValueAtTime(0.25, t + 0.054)
     lg.gain.exponentialRampToValueAtTime(0.001, t + 0.1)
-    src.connect(bp).connect(lg).connect(this.listener.getInput())
+    src.connect(bp).connect(lg).connect(out)
     src.start(t + 0.05)
     src.stop(t + 0.12)
   }
@@ -318,12 +320,12 @@ class AudioEngine {
    * Door opening: latch clack, the swing, a soft thud at the end. The front
    * door creaks; `soft` doors between rooms just hush open on their closers.
    */
-  doorOpen(seconds: number, { soft = false }: { soft?: boolean } = {}) {
-    if (!this.started) return
+  doorOpen(seconds: number, { soft = false, volume = 1 }: { soft?: boolean; volume?: number } = {}) {
+    if (!this.started || volume < 0.02) return
     const ctx = this.ctx
     const t = ctx.currentTime
     const out = ctx.createGain()
-    out.gain.value = soft ? 0.5 : 0.9
+    out.gain.value = (soft ? 0.5 : 0.9) * volume
     out.connect(this.listener.getInput())
     out.connect(this.reverbIn)
 

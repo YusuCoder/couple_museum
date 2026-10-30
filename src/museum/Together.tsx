@@ -7,7 +7,8 @@ import { Avatar, MODELS } from './Character'
 import { playerState } from './Player'
 import { romance } from './Skylight'
 import { useMuseum } from './store'
-import { connect, partnerOf, pruneRemotes, remotes, sample, type Link, type Pose, type Who } from './presence'
+import { connect, partnerOf, pruneRemotes, remoteBodies, remotes, sample, shareWorld, type Link, type Pose, type Who } from './presence'
+import { useSharedWorld, worldSnapshot } from './world'
 
 /** Reports per second while moving, and how often to repeat an unchanged one. */
 const SEND_HZ = 10
@@ -26,8 +27,6 @@ const HUG_BREAK = 2.4
 const fwd = (yaw: number) => new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw))
 const left = (yaw: number) => new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw))
 
-/** Bodies of the people drawn here, by id (the embrace reads the partner's). */
-const remoteBodies = new Map<string, ReturnType<typeof makeBody>>()
 
 /**
  * Everyone else walking this museum, and the link that tells them about this
@@ -38,7 +37,11 @@ export function Together({ museumId, myId }: { museumId: string | null; myId: st
   const link = useRef<Link | null>(null)
 
   useEffect(() => {
+    let known = new Set<string>()
     const refresh = () => {
+      // Someone new: bring them up to date with doors and films
+      if ([...remotes.keys()].some((id) => !known.has(id))) setTimeout(() => shareWorld(worldSnapshot()), 300)
+      known = new Set(remotes.keys())
       setIds([...remotes.keys()])
       useMuseum.getState().set({ partnerHere: !!partnerOf(useMuseum.getState().me) })
     }
@@ -84,6 +87,7 @@ export function Together({ museumId, myId }: { museumId: string | null; myId: st
   }, [museumId, myId])
 
   useEmbrace()
+  useSharedWorld()
 
   return (
     <>
@@ -160,8 +164,10 @@ function useEmbrace() {
     let target = 0
     if (other) {
       const dist = Math.hypot(other.position.x - mine.position.x, other.position.z - mine.position.z)
-      const otherInLight =
-        romance.inside.size > 0 && Math.hypot(other.position.x - romance.centre.x, other.position.z - romance.centre.z) < romance.radius
+      // The lights dim when either is in the circle; the embrace needs both in it
+      const inLight = (p: THREE.Vector3) =>
+        romance.inside.size > 0 && Math.hypot(p.x - romance.centre.x, p.z - romance.centre.z) < romance.radius
+      const otherInLight = inLight(other.position) && inLight(mine.position)
       const mySpeed = Math.hypot(mine.velocity.x, mine.velocity.z)
       const otherSpeed = Math.hypot(other.velocity.x, other.velocity.z)
       const free = (mode === 'walking' || mode === 'paused') && !mine.seat && !other.seat

@@ -3,6 +3,7 @@ import * as THREE from 'three'
 import { useFrame } from '@react-three/fiber'
 
 import { playerState } from './Player'
+import { everyone } from './presence'
 
 /**
  * The Skylight room's touches: a soft beam falling through the round skylight,
@@ -31,7 +32,7 @@ function canvasTex(w: number, h: number, draw: (ctx: CanvasRenderingContext2D) =
  */
 export const romance = {
   value: 0,
-  /** Skylight rooms whose circle the visitor is standing in. */
+  /** Skylight rooms whose circle someone (this visitor or the other) is standing in: the lights dim for both. */
   inside: new Set<object>(),
   /** Centre (on the floor) of the circle being stood in: where the spotlight falls. */
   centre: new THREE.Vector3(),
@@ -55,8 +56,7 @@ export function Romance({ radius, dome }: { radius: number; dome: THREE.MeshStan
   useFrame(() => {
     if (!ref.current) return
     ref.current.getWorldPosition(centre)
-    const p = playerState.position
-    if (Math.hypot(p.x - centre.x, p.z - centre.z) < radius) {
+    if (everyone(playerState.position).some((p) => Math.hypot(p.x - centre.x, p.z - centre.z) < radius)) {
       romance.inside.add(key)
       romance.centre.copy(centre)
       romance.radius = radius

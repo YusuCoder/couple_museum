@@ -6,6 +6,7 @@ import { CuboidCollider, RigidBody } from '@react-three/rapier'
 import { audio } from './audio'
 import { DOORWAY, WALL } from './floorplan'
 import { playerState } from './Player'
+import { everyone, hearing, shareWorld } from './presence'
 import { occluders, useMuseum, type DoorState } from './store'
 
 /**
@@ -97,6 +98,7 @@ const CLOSE_SECONDS = 2.6
 const REACH = 3.6
 const CLOSE_AFTER = 9
 
+const _door = new THREE.Vector3()
 const CLOSED: DoorState = { state: 'closed', dir: -1 }
 
 /** World z of each doorway's door, by index (door k joins room k and room k+1). */
@@ -112,6 +114,7 @@ export function openNearDoor() {
   // Push it away: walking towards -z opens it into the next room, and back again the other way
   const dir: -1 | 1 = playerState.position.z > z ? -1 : 1
   s.set({ doors: { ...s.doors, [index]: { state: 'opening', dir } }, nearDoor: null })
+  shareWorld({ kind: 'door', index, state: 'opening', dir })
   return true
 }
 
@@ -146,20 +149,31 @@ export function InteriorDoor({ index, z, forward, back }: { index: number; z: nu
     if (near && s.nearDoor?.index !== index) s.set({ nearDoor: { index, label: p.z > z ? forward : back } })
     else if (!near && s.nearDoor?.index === index) s.set({ nearDoor: null })
 
+    const volume = hearing(_door.set(0, 0, z), p)
     if (d.state !== sounded.current) {
       sounded.current = d.state
-      if (d.state === 'opening') audio().doorOpen(OPEN_SECONDS, { soft: true })
+      if (d.state === 'opening') audio().doorOpen(OPEN_SECONDS, { soft: true, volume })
     }
+
+    // Arrived to find it already open (or shut): no swing
+    if (d.state === 'open') progress.current = 1
+    else if (d.state === 'closed') progress.current = 0
 
     if (d.state === 'opening') {
       progress.current = Math.min(progress.current + dt / OPEN_SECONDS, 1)
       if (progress.current >= 1) s.set({ doors: { ...s.doors, [index]: { ...d, state: 'open' } } })
-    } else if (d.state === 'open' && dist > CLOSE_AFTER && s.mode === 'walking') {
+    } else if (
+      d.state === 'open' &&
+      s.mode === 'walking' &&
+      // Swings shut only once everyone has moved on from it
+      everyone(p).every((q) => Math.hypot(q.x, q.z - z) > CLOSE_AFTER)
+    ) {
       s.set({ doors: { ...s.doors, [index]: { ...d, state: 'closing' } } })
+      shareWorld({ kind: 'door', index, state: 'closing', dir: d.dir })
     } else if (d.state === 'closing') {
       progress.current = Math.max(progress.current - dt / CLOSE_SECONDS, 0)
       if (progress.current <= 0) {
-        audio().doorClose()
+        audio().doorClose(volume)
         s.set({ doors: { ...s.doors, [index]: { ...d, state: 'closed' } } })
       }
     }

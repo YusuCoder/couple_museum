@@ -7,7 +7,9 @@ import { audio } from './audio'
 import { INTRO, INTRO_FILM, PANELS, ROOM, type Exhibit } from './exhibits'
 import { LightPool } from './LightPool'
 import { SHAPES } from './floorplan'
+import { shareWorld } from './presence'
 import { isTouch } from './touch'
+import { filmEpochs, filmTime, voiceTriggers } from './world'
 import { RoomCtx } from './roomContext'
 import { exhibitRegistry, useMuseum } from './store'
 import { placeholderPhoto, plaqueTexture } from './textures'
@@ -32,7 +34,7 @@ const wireMaterial = new THREE.MeshStandardMaterial({ color: '#b89a63', metalnes
 const bezelMaterial = new THREE.MeshStandardMaterial({ color: '#0b0b0c', roughness: 0.25, metalness: 0.4 })
 
 /** Imperative hooks a media child exposes to the exhibit (e.g. "replay"). */
-type MediaRef = RefObject<{ replay?: () => void }>
+type MediaRef = RefObject<{ replay?: () => void; approach?: () => void }>
 
 export function Frame({ exhibit }: { exhibit: Exhibit }) {
   return exhibit.kind === 'video' ? <VideoFrame exhibit={exhibit} /> : <PhotoFrame exhibit={exhibit} />
@@ -303,6 +305,19 @@ function exhibitSound(listener: THREE.AudioListener, reverbIn: AudioNode) {
   return sound
 }
 
+/** A voice note the other visitor sets off plays here too, if this visitor is this close (m). */
+const VOICE_SHARED_REACH = 8
+/** A film more than this far (s) from the shared clock is put back in step. */
+const FILM_DRIFT = 0.6
+
+let listener: THREE.Object3D | null = null
+const _listen = new THREE.Vector3()
+/** Distance from the listener (the camera) to an object. */
+function listenerDistance(o: THREE.Object3D) {
+  listener ??= audio().listener
+  return listener.getWorldPosition(_listen).distanceTo(o.getWorldPosition(_world))
+}
+
 /** Films' distance to the camera last frame: on a phone only the nearest one plays. */
 const filmDistance = new Map<string, number>()
 const nearestFilm = () => {
@@ -336,15 +351,29 @@ function VoiceNote({ exhibit, media }: { exhibit: Exhibit; media: MediaRef }) {
       baseEnded()
       a.duck(key, false)
     }
-    media.current.replay = () => {
-      if (!sound.buffer) return
+    const play = () => {
+      if (!sound.buffer) return false
       if (sound.isPlaying) sound.stop()
       sound.play()
       a.duck(key, true)
+      return true
     }
+    // Replay (or walking up to it): plays here and for whoever else is in the museum
+    media.current.replay = () => {
+      if (play()) shareWorld({ kind: 'voice', id: exhibit.id })
+    }
+    media.current.approach = () => {
+      if (!sound.isPlaying && play()) shareWorld({ kind: 'voice', id: exhibit.id })
+    }
+    // The other visitor set it off: join in if close enough to hear it (and it isn't playing already)
+    voiceTriggers.set(exhibit.id, () => {
+      const near = anchor.current && listenerDistance(anchor.current) < VOICE_SHARED_REACH
+      if (near && !sound.isPlaying) play()
+    })
 
     return () => {
       disposed = true
+      voiceTriggers.delete(exhibit.id)
       if (sound.isPlaying) sound.stop()
       a.duck(key, false)
       sound.removeFromParent()
@@ -358,7 +387,7 @@ function VoiceNote({ exhibit, media }: { exhibit: Exhibit; media: MediaRef }) {
     if (mode === 'intro' || !anchor.current) return
     const dist = camera.position.distanceTo(anchor.current.getWorldPosition(_world))
     if (armed.current && dist < 2.6) {
-      media.current.replay?.()
+      media.current.approach?.()
       armed.current = false
     } else if (dist > 4.5) armed.current = true
   })
@@ -384,6 +413,7 @@ function VideoScreen({
   const video = useRef<HTMLVideoElement | null>(null)
   const ducked = useRef(false)
   const retryAt = useRef(0)
+  const checkAt = useRef(0)
   const [tex, setTex] = useState<THREE.VideoTexture | null>(null)
   const key = `video:${exhibit.id}`
 
@@ -408,7 +438,11 @@ function VideoScreen({
     t.colorSpace = THREE.SRGBColorSpace
     setTex(t)
     video.current = el
+    // Replay: from the start, for everyone in the museum (films run on a shared clock)
     media.current.replay = () => {
+      const epoch = Date.now()
+      filmEpochs.set(exhibit.id, epoch)
+      shareWorld({ kind: 'film', id: exhibit.id, epoch })
       el.currentTime = 0
       void el.play().catch(() => {})
     }
@@ -437,9 +471,18 @@ function VideoScreen({
     const near = mode !== 'intro' && mode !== 'paused' && dist < 9 && (!isTouch || nearestFilm() === exhibit.id)
 
     if (near && el.paused && clock.elapsedTime > retryAt.current) {
+      // Pick up where the shared clock says the film is, so both visitors see the same moment
+      if (el.duration) el.currentTime = filmTime(exhibit.id, el.duration)
       // Autoplay can be refused before the first click; back off instead of retrying every frame
       el.play().catch(() => (retryAt.current = clock.elapsedTime + 2))
     } else if (!near && !el.paused) el.pause()
+    else if (!el.paused && el.duration && clock.elapsedTime > checkAt.current) {
+      // Drifted (a stall, a replay elsewhere): catch up
+      checkAt.current = clock.elapsedTime + 2
+      const d = el.duration
+      const off = ((el.currentTime - filmTime(exhibit.id, d) + d * 1.5) % d) - d / 2
+      if (Math.abs(off) > FILM_DRIFT) el.currentTime = filmTime(exhibit.id, d)
+    }
 
     const duck = near && dist < 5
     if (duck !== ducked.current) {

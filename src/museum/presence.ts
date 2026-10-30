@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 
 import { supabase } from '../content/supabase'
+import type { Body } from './body'
 import type { Seat } from './Seats'
 
 /**
@@ -40,6 +41,35 @@ export interface Remote {
 
 /** Everyone else in the museum right now, by id. */
 export const remotes = new Map<string, Remote>()
+/** Their figures as drawn here (smoothed positions), by id. */
+export const remoteBodies = new Map<string, Body>()
+
+/**
+ * Things in the museum both visitors share: doors, films, voice notes. Sent
+ * when someone changes one; a full snapshot goes to whoever arrives late.
+ */
+export type WorldEvent =
+  | { kind: 'gate' }
+  | { kind: 'door'; index: number; state: 'opening' | 'closing'; dir: -1 | 1 }
+  | { kind: 'film'; id: string; epoch: number }
+  | { kind: 'voice'; id: string }
+  | { kind: 'snapshot'; gate: boolean; doors: { index: number; dir: -1 | 1 }[]; films: [string, number][] }
+
+const worldHandlers = new Set<(e: WorldEvent) => void>()
+let active: Link | null = null
+
+/** Tell everyone else about a change to the shared museum. */
+export function shareWorld(e: WorldEvent) {
+  active?.event(e)
+}
+/** Hear about changes others make. Returns the unsubscribe. */
+export function onWorld(handler: (e: WorldEvent) => void) {
+  worldHandlers.add(handler)
+  return () => {
+    worldHandlers.delete(handler)
+  }
+}
+const heard = (e: WorldEvent) => worldHandlers.forEach((h) => h(e))
 
 /** How far in the past remote figures are drawn (ms): room to smooth between reports. */
 const DELAY = 160
@@ -48,6 +78,7 @@ const TIMEOUT = 6000
 
 export interface Link {
   send: (pose: Pose) => void
+  event: (e: WorldEvent) => void
   close: () => void
 }
 
@@ -55,6 +86,18 @@ export type LinkStatus = { state: 'connecting' | 'live' | 'device' | 'failed'; w
 
 /** Join the museum's channel. `onChange` fires when someone arrives or leaves; `onStatus` as the connection changes. */
 export function connect(museumId: string | null, onChange: () => void, onStatus: (s: LinkStatus) => void): Link {
+  const link = open(museumId, onChange, onStatus)
+  active = link
+  return {
+    ...link,
+    close: () => {
+      if (active === link) active = null
+      link.close()
+    },
+  }
+}
+
+function open(museumId: string | null, onChange: () => void, onStatus: (s: LinkStatus) => void): Link {
   const receive = (pose: Pose) => {
     let r = remotes.get(pose.id)
     if (!r) {
@@ -82,6 +125,7 @@ export function connect(museumId: string | null, onChange: () => void, onStatus:
     channel
       .on('broadcast', { event: 'pose' }, ({ payload }) => receive(payload as Pose))
       .on('broadcast', { event: 'bye' }, ({ payload }) => drop((payload as { id: string }).id))
+      .on('broadcast', { event: 'world' }, ({ payload }) => heard(payload as WorldEvent))
       .subscribe((status, err) => {
         live = status === 'SUBSCRIBED'
         if (live) onStatus({ state: 'live' })
@@ -97,6 +141,9 @@ export function connect(museumId: string | null, onChange: () => void, onStatus:
         me = pose.id
         if (live) void channel.send({ type: 'broadcast', event: 'pose', payload: pose })
       },
+      event: (e) => {
+        if (live) void channel.send({ type: 'broadcast', event: 'world', payload: e })
+      },
       close: () => {
         if (live && me) void channel.send({ type: 'broadcast', event: 'bye', payload: { id: me } })
         void db.removeChannel(channel)
@@ -106,10 +153,11 @@ export function connect(museumId: string | null, onChange: () => void, onStatus:
   }
 
   onStatus({ state: 'device' })
-  if (typeof BroadcastChannel === 'undefined') return { send: () => {}, close: () => {} }
+  if (typeof BroadcastChannel === 'undefined') return { send: () => {}, event: () => {}, close: () => {} }
   const bc = new BroadcastChannel('couple-museum-together')
-  bc.onmessage = (e: MessageEvent<{ type: 'pose'; pose: Pose } | { type: 'bye'; id: string }>) => {
+  bc.onmessage = (e: MessageEvent<{ type: 'pose'; pose: Pose } | { type: 'bye'; id: string } | { type: 'world'; event: WorldEvent }>) => {
     if (e.data.type === 'pose') receive(e.data.pose)
+    else if (e.data.type === 'world') heard(e.data.event)
     else drop(e.data.id)
   }
   let me: string | null = null
@@ -120,6 +168,7 @@ export function connect(museumId: string | null, onChange: () => void, onStatus:
       me = pose.id
       bc.postMessage({ type: 'pose', pose })
     },
+    event: (event) => bc.postMessage({ type: 'world', event }),
     close: () => {
       bye()
       removeEventListener('pagehide', bye)
@@ -170,6 +219,17 @@ export function sample(r: Remote, position: THREE.Vector3, velocity: THREE.Vecto
     velocity.set(p.vx, 0, p.vz)
   }
   return newest.pose
+}
+
+/** Where everyone is: this visitor and each other figure. */
+export function everyone(mine: THREE.Vector3): THREE.Vector3[] {
+  return [mine, ...[...remoteBodies.values()].map((b) => b.position)]
+}
+
+/** How loud a sound at `at` is for this visitor (1 close by, fading over a couple of rooms). */
+export function hearing(at: THREE.Vector3, mine: THREE.Vector3) {
+  const d = Math.hypot(at.x - mine.x, at.z - mine.z)
+  return 1 / (1 + (d / 10) ** 2)
 }
 
 /** The first person here who is the other half of the couple (for the embrace). */

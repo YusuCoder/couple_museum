@@ -10,7 +10,7 @@ import { ROTUNDA, SHAPES } from './floorplan'
 import { playerState, thirdPersonPose } from './Player'
 import { rigs } from './embrace'
 import { sitDown, standUp } from './Seats'
-import { remotes } from './presence'
+import { remotes, shareWorld } from './presence'
 import { romance } from './Skylight'
 import { exhibitRegistry, occluders, useMuseum, type ExhibitHandle } from './store'
 import { controlling, isTouch, stick } from './touch'
@@ -151,7 +151,10 @@ export function exitView(relock: boolean) {
 /** Swing the front doors open (only when standing near them). */
 export function openGate() {
   const s = useMuseum.getState()
-  if (s.gate === 'closed' && s.nearGate) s.set({ gate: 'opening', nearGate: false })
+  if (s.gate === 'closed' && s.nearGate) {
+    s.set({ gate: 'opening', nearGate: false })
+    shareWorld({ kind: 'gate' })
+  }
 }
 
 export function toggleView() {

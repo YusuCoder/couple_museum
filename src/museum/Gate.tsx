@@ -7,6 +7,7 @@ import { audio } from './audio'
 import { DoorLeaf, swing } from './Doors'
 import { FACADE, GATE } from './floorplan'
 import { playerState } from './Player'
+import { hearing } from './presence'
 import { useMuseum } from './store'
 
 const LEAF_W = GATE.width / 2
@@ -22,6 +23,8 @@ const REACH = 4.5
  * hinged at the sides of the opening.
  * E (or a click) when close swings them inward with a creak and a thud.
  */
+const _gate = new THREE.Vector3()
+
 export function Gate() {
   const gate = useMuseum((s) => s.gate)
   const left = useRef<THREE.Group>(null)
@@ -37,9 +40,14 @@ export function Gate() {
     if (near !== s.nearGate) s.set({ nearGate: near })
 
     if (s.gate === 'closed') return
+    // Arrived to find it already open: no swing, no creak
+    if (s.gate === 'open' && progress.current < 1) {
+      progress.current = 1
+      startedSound.current = true
+    }
     if (!startedSound.current) {
       startedSound.current = true
-      audio().doorOpen(OPEN_SECONDS)
+      audio().doorOpen(OPEN_SECONDS, { volume: hearing(_gate.set(0, 0, FACADE.depth), p) })
     }
     progress.current = Math.min(progress.current + dt / OPEN_SECONDS, 1)
     const a = swing(progress.current) * OPEN_ANGLE
