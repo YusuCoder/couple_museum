@@ -7,9 +7,9 @@ import { audio } from './audio'
 import { INTRO, INTRO_FILM, PANELS, ROOM, type Exhibit } from './exhibits'
 import { LightPool } from './LightPool'
 import { SHAPES } from './floorplan'
-import { shareWorld } from './presence'
+import { remoteBodies, shareWorld } from './presence'
 import { isTouch } from './touch'
-import { filmEpochs, filmTime, voiceTriggers } from './world'
+import { filmElements, filmEpochs, filmTime, voiceTriggers } from './world'
 import { RoomCtx } from './roomContext'
 import { exhibitRegistry, useMuseum } from './store'
 import { placeholderPhoto, plaqueTexture } from './textures'
@@ -438,6 +438,7 @@ function VideoScreen({
     t.colorSpace = THREE.SRGBColorSpace
     setTex(t)
     video.current = el
+    filmElements.add(el)
     // Replay: from the start, for everyone in the museum (films run on a shared clock)
     media.current.replay = () => {
       const epoch = Date.now()
@@ -456,6 +457,7 @@ function VideoScreen({
       t.dispose()
       a.duck(`video:${exhibit.id}`, false)
       filmDistance.delete(exhibit.id)
+      filmElements.delete(el)
       video.current = null
       media.current.replay = undefined
     }
@@ -466,9 +468,12 @@ function VideoScreen({
     if (!el || !anchor.current) return
     const mode = useMuseum.getState().mode
     const dist = camera.position.distanceTo(anchor.current.getWorldPosition(_world))
-    filmDistance.set(exhibit.id, dist)
+    // A film plays for everyone once anyone walks up to it (on a shared clock, so all see the same moment)
+    let closest = dist
+    for (const b of remoteBodies.values()) closest = Math.min(closest, Math.hypot(b.position.x - _world.x, b.position.z - _world.z))
+    filmDistance.set(exhibit.id, closest)
     // A phone decodes one film at a time: the closest
-    const near = mode !== 'intro' && mode !== 'paused' && dist < 9 && (!isTouch || nearestFilm() === exhibit.id)
+    const near = mode !== 'intro' && mode !== 'paused' && closest < 9 && (!isTouch || nearestFilm() === exhibit.id)
 
     if (near && el.paused && clock.elapsedTime > retryAt.current) {
       // Pick up where the shared clock says the film is, so both visitors see the same moment

@@ -27,7 +27,7 @@ import { Together } from './Together'
  * or the demo when it's empty / ?demo is set, and hangs it.
  */
 /** This device / demo: a fresh id per tab, so two tabs can walk together; `?as=her` walks as her. */
-const LOCAL_ID = crypto.randomUUID()
+const LOCAL_ID = crypto.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
 
 function useMuseumContent(demo: boolean, asHer: boolean) {
   const [ready, setReady] = useState(false)

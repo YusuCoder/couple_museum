@@ -11,6 +11,7 @@ import { playerState, thirdPersonPose } from './Player'
 import { rigs } from './embrace'
 import { sitDown, standUp } from './Seats'
 import { remotes, shareWorld } from './presence'
+import { unlockFilms } from './world'
 import { romance } from './Skylight'
 import { exhibitRegistry, occluders, useMuseum, type ExhibitHandle } from './store'
 import { controlling, isTouch, stick } from './touch'
@@ -90,6 +91,7 @@ function levelGaze(q: THREE.Quaternion) {
 
 export function lockPointer() {
   audio().start()
+  unlockFilms()
   if (!isTouch) return controls?.lock()
   // Touch screens have no pointer lock: the scene is live as soon as they're in
   void document.documentElement.requestFullscreen?.({ navigationUI: 'hide' }).catch(() => {})

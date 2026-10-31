@@ -21,6 +21,24 @@ export function filmTime(id: string, duration: number) {
   return (((Date.now() - (filmEpochs.get(id) ?? 0)) / 1000) % duration + duration) % duration
 }
 
+/** Every film screen's video, so a tap can unlock them all (see unlockFilms). */
+export const filmElements = new Set<HTMLVideoElement>()
+
+/**
+ * iPhones only let a film with sound start from a tap. Call this inside one
+ * (entering the museum): each film starts and stops at once, and from then on
+ * may play whenever someone walks up to it — including when the other
+ * visitor does.
+ */
+export function unlockFilms() {
+  for (const el of filmElements) {
+    if (!el.paused) continue
+    el.play()
+      .then(() => el.pause())
+      .catch(() => {})
+  }
+}
+
 /** Voice notes listening for the other visitor setting them off, by exhibit id. */
 export const voiceTriggers = new Map<string, () => void>()
 
