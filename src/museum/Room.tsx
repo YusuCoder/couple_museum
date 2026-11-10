@@ -12,7 +12,7 @@ import { LightPool } from './LightPool'
 import { RoomCtx } from './roomContext'
 import { Bench } from './Seats'
 import { SolidBox, faces } from './SolidBox'
-import { FloorGlow, LightBeam, Petals, Romance } from './Skylight'
+import { FloorGlow, LIGHT_CIRCLE, LightBeam, Petals, Romance } from './Skylight'
 import { occluders } from './store'
 import { doorSignTexture, wallTitleTexture } from './textures'
 
@@ -250,7 +250,7 @@ function rotunda(room: RoomContent, subtitle: string, isLast: boolean) {
       </mesh>
       <LightBeam top={OCULUS} bottom={3.3} height={oculusY} />
       <FloorGlow radius={3.6} />
-      <Romance radius={3.3} dome={domeMaterial} />
+      <Romance radius={LIGHT_CIRCLE} dome={domeMaterial} />
       <Petals spread={4} height={oculusY} count={120} />
 
       {/* The chapter title lies on the floor in the circle of light, reading towards the entrance */}

@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { useFrame, useThree } from '@react-three/fiber'
-import { Environment, Lightformer, MeshReflectorMaterial, Sky } from '@react-three/drei'
+import { Environment, Lightformer, MeshReflectorMaterial } from '@react-three/drei'
 import { CuboidCollider, RigidBody } from '@react-three/rapier'
 
 import { audio } from './audio'
@@ -10,8 +10,11 @@ import { InteriorDoor } from './Doors'
 import { BUILDING_HALF_WIDTH, SHAPES, WALL, buildingPlan, roomIndexAt } from './floorplan'
 import { ROOM } from './exhibits'
 import { Exterior } from './Exterior'
+import { Fireworks, fireworkGlow } from './Fireworks'
+import { NightSky } from './Night'
 import { playerState } from './Player'
 import { Room, STRIP_X } from './Room'
+import { RoomLights } from './RoomLights'
 import { romance, romanceLevel } from './Skylight'
 import { useMuseum } from './store'
 import { concreteTexture } from './textures'
@@ -21,8 +24,8 @@ const W = ROOM.width
 const L = ROOM.length
 const H = ROOM.height
 
-/** Low golden-hour sun behind the visitor as they face the front door. */
-const SUN = new THREE.Vector3(-45, 5, 70)
+/** Moonlight comes from behind the visitor's left as they face the front door (so the facade catches it). */
+const MOONLIGHT = new THREE.Vector3(-45, 30, 70)
 
 /**
  * The whole museum: plaza and facade outside, then the chapter rooms in a
@@ -49,7 +52,8 @@ export function Building() {
   return (
     <>
       <LightRig />
-      <Sky distance={450} sunPosition={SUN} turbidity={10} rayleigh={3} mieCoefficient={0.008} mieDirectionalG={0.9} />
+      <NightSky />
+      <Fireworks />
 
       <Floor length={plan.length} />
       <Exterior length={plan.length} />
@@ -74,6 +78,19 @@ export function Building() {
           back={`Chapter ${roman(k + 1)} · ${room.title}`}
         />
       ))}
+      {rooms.map((room, i) => {
+        const len = (k: number) => SHAPES[plan.shapes[k]].length
+        // Just inside the doorway, behind the door's leaves
+        const z = i === 0 ? -0.03 : plan.centers[i - 1] - len(i - 1) / 2 - WALL - 0.06
+        return (
+          <RoomLights
+            key={`${room.id}:lights`}
+            door={i === 0 ? null : i - 1}
+            z={z}
+            inside={{ far: plan.centers[i] - len(i) / 2 - WALL, half: BUILDING_HALF_WIDTH }}
+          />
+        )
+      })}
       <WarmUp onDone={() => setWarm(true)} />
     </>
   )
@@ -142,10 +159,13 @@ function Floor({ length }: { length: number }) {
 
 /**
  * Cheap lights only (every light is paid for on every pixel; exhibit spots
- * are faked with LightPool). The sun fades out as the visitor goes inside so
+ * are faked with LightPool). The moonlight fades out as the visitor goes inside so
  * it never lights the interior through the walls; outdoor sound follows.
  */
 const HEMI = { sky: new THREE.Color('#fff8ee'), ground: new THREE.Color('#6b6158'), intensity: 1.1 }
+/** Out on the plaza at night: a dim blue sky light instead of the galleries' warm one. */
+const NIGHT_HEMI = { sky: new THREE.Color('#5d6f9e'), ground: new THREE.Color('#1c1a20'), intensity: 0.38 }
+const MOON_INTENSITY = 0.55
 /** Lamp-light tint the room warms to as it dims (see `romance`). */
 const HUSH_SKY = new THREE.Color('#ffcf9f')
 const FILL = 0.35
@@ -171,9 +191,14 @@ function LightRig() {
     const rate = target > romance.value ? 1 / romance.dimSeconds : -1 / romance.brightenSeconds
     romance.value = THREE.MathUtils.clamp(romance.value + rate * Math.min(dt, 0.1), 0, 1)
     const k = romanceLevel()
+    // 1 on the plaza, 0 a few metres past the door
+    const f = THREE.MathUtils.smoothstep(camera.position.z, -4, 2)
     if (hemi.current) {
-      hemi.current.intensity = HEMI.intensity * (1 - 0.68 * k)
-      hemi.current.color.copy(HEMI.sky).lerp(HUSH_SKY, k)
+      const inside = HEMI.intensity * (1 - 0.68 * k)
+      // Each firework burst lights the plaza for an instant
+      hemi.current.intensity = THREE.MathUtils.lerp(inside, NIGHT_HEMI.intensity + fireworkGlow.value * 0.9, f)
+      hemi.current.color.copy(HEMI.sky).lerp(HUSH_SKY, k).lerp(NIGHT_HEMI.sky, f)
+      hemi.current.groundColor.copy(HEMI.ground).lerp(NIGHT_HEMI.ground, f)
     }
     if (fill.current) fill.current.intensity = FILL * (1 - 0.8 * k)
     if (spot.current) {
@@ -184,11 +209,10 @@ function LightRig() {
         spotTarget.updateMatrixWorld()
       }
     }
-    scene.environmentIntensity = 1 - 0.65 * k
+    // The galleries' reflections would light the night outside too brightly
+    scene.environmentIntensity = (1 - 0.65 * k) * (1 - 0.7 * f)
 
-    // 1 on the plaza, 0 a few metres past the door
-    const f = THREE.MathUtils.smoothstep(camera.position.z, -4, 2)
-    if (sun.current) sun.current.intensity = 2.6 * f
+    if (sun.current) sun.current.intensity = MOON_INTENSITY * f
     if (Math.abs(f - outdoor.current) > 0.01) {
       outdoor.current = f
       audio().setOutdoor(f)
@@ -201,7 +225,8 @@ function LightRig() {
       <directionalLight ref={fill} position={[2, 10, 4]} intensity={FILL} color="#fff3e0" />
       <primitive object={spotTarget} />
       <spotLight ref={spot} target={spotTarget} intensity={0} angle={SPOT.angle} penumbra={SPOT.penumbra} decay={2} distance={0} color="#ffe6c4" />
-      <directionalLight ref={sun} position={SUN.clone().normalize().multiplyScalar(50)} color="#ffcf9a" intensity={2.6} />
+      {/* Moonlight on the plaza (fades out indoors so it never lights the rooms through the walls) */}
+      <directionalLight ref={sun} position={MOONLIGHT.clone().normalize().multiplyScalar(50)} color="#a9bce6" intensity={MOON_INTENSITY} />
 
       {/* Image-based light for reflections on the floor, glass and brass */}
       <Environment resolution={256} frames={1}>

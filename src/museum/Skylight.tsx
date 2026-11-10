@@ -43,6 +43,9 @@ export const romance = {
   brightenSeconds: 2.5,
 }
 
+/** The Skylight room's circle of light on the floor, around the room's centre (m). */
+export const LIGHT_CIRCLE = 3.3
+
 /** 0..1, eased (slow at both ends). */
 export const romanceLevel = () => THREE.MathUtils.smoothstep(romance.value, 0, 1)
 

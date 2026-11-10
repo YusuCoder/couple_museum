@@ -62,7 +62,7 @@ const HALL: Template = {
   ],
   // Photos: frame shaped to the photo. Videos: one standard screen per kind of spot.
   size: (m, slot) =>
-    slot.large ? (m.kind === 'video' ? 2.7 : m.aspect >= 1 ? 2.5 : 2.1) : m.kind === 'video' ? 1.7 : m.aspect > 1.3 ? 1.5 : 1.2,
+    slot.large ? (m.kind === 'video' ? 3.2 : m.aspect >= 1 ? 3.2 : 2.7) : m.kind === 'video' ? 1.95 : m.aspect > 1.3 ? 2 : 1.6,
 }
 
 // ---------------------------------------------------------------- rotunda
@@ -108,7 +108,7 @@ const ROTUNDA_T: Template = {
   finale: { wall: 'free', along: 0, x: 0, z: -FLOAT_RING + 0.2, rotY: 0, hang: true },
   flanks: [],
   size: (m, slot) =>
-    slot.large ? (m.kind === 'video' ? 3.8 : m.aspect >= 1 ? 2.6 : 2.1) : m.kind === 'video' ? 1.6 : m.aspect > 1.3 ? 1.5 : 1.2,
+    slot.large ? (m.kind === 'video' ? 3.8 : m.aspect >= 1 ? 3.2 : 2.7) : m.kind === 'video' ? 1.95 : m.aspect > 1.3 ? 1.9 : 1.55,
 }
 
 // ---------------------------------------------------------------- corridor
@@ -130,7 +130,7 @@ const CORRIDOR_T: Template = {
   finale: { wall: 'free', along: 0, x: 0, z: -CORRIDOR.length / 2 + 0.01, rotY: 0, dark: true, top: CORRIDOR.height },
   flanks: [],
   // Intimate scale: smaller prints
-  size: (m) => (m.kind === 'video' ? 1.5 : m.aspect > 1.3 ? 1.3 : 1.05),
+  size: (m) => (m.kind === 'video' ? 1.9 : m.aspect > 1.3 ? 1.7 : 1.4),
 }
 
 const TEMPLATES: Record<RoomShape, Template> = { hall: HALL, rotunda: ROTUNDA_T, corridor: CORRIDOR_T }

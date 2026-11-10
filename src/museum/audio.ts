@@ -10,7 +10,7 @@ if (isTouch && typeof AudioContext !== 'undefined') {
 
 /**
  * All museum sound lives on one AudioContext (three's listener context):
- * footsteps + room tone + generative music are synthesized; exhibit media
+ * footsteps + birds + generative music are synthesized; exhibit media
  * (voice notes, films) are PositionalAudio nodes that also feed the reverb.
  */
 class AudioEngine {
@@ -18,6 +18,8 @@ class AudioEngine {
   readonly ctx = this.listener.context
   /** Send bus into the room reverb — connect any node here for "in the hall" sound. */
   readonly reverbIn: GainNode
+  /** Send bus into a soft repeating echo, as if the voice carried down the gallery (voice notes). */
+  readonly echoIn: GainNode
 
   private noise: AudioBuffer
   private musicBus: GainNode
@@ -26,13 +28,24 @@ class AudioEngine {
   private ducks = new Set<string>()
   private started = false
   private nextChordAt = 0
-  /** Indoor hum vs outdoor wind/birds, crossfaded by setOutdoor(). */
-  private roomToneGain: GainNode | null = null
-  private windGain: GainNode | null = null
+  /** How far outside the visitor is: birds sing only on the plaza (see setOutdoor). */
   private outdoor = 1
   private nextBirdAt = 0
   /** The couple's own soundtrack; replaces the generated music when set. */
   private track: { el: HTMLAudioElement; node: MediaElementAudioSourceNode } | null = null
+  /**
+   * Phones: music and footsteps are rendered ahead into plain sound buffers and
+   * just played back, instead of being synthesized (or streamed from a media
+   * element) live while the 3D scene is drawing.
+   */
+  private fw: { bursts: AudioBuffer[]; crackles: AudioBuffer[]; launches: AudioBuffer[]; bus: AudioNode } | null = null
+  private fwPending = false
+  private phone = {
+    url: null as string | null,
+    song: null as AudioBufferSourceNode | null,
+    generated: null as AudioBufferSourceNode | null,
+    steps: [] as AudioBuffer[],
+  }
   private chordIndex = 0
 
   constructor() {
@@ -46,6 +59,21 @@ class AudioEngine {
     const reverbOut = ctx.createGain()
     reverbOut.gain.value = 0.32
     this.reverbIn.connect(convolver).connect(reverbOut).connect(out)
+
+    // Echo: a delay feeding back into itself through a darkening filter, so each repeat is softer and duller
+    this.echoIn = ctx.createGain()
+    const delay = ctx.createDelay(1)
+    delay.delayTime.value = 0.27
+    const dull = ctx.createBiquadFilter()
+    dull.type = 'lowpass'
+    dull.frequency.value = 2400
+    const feedback = ctx.createGain()
+    feedback.gain.value = 0.34
+    const echoOut = ctx.createGain()
+    echoOut.gain.value = 0.38
+    this.echoIn.connect(delay).connect(dull).connect(feedback).connect(delay)
+    dull.connect(echoOut).connect(out)
+    if (!isTouch) echoOut.connect(this.reverbIn)
 
     this.noise = ctx.createBuffer(1, ctx.sampleRate * 0.25, ctx.sampleRate)
     const data = this.noise.getChannelData(0)
@@ -69,11 +97,13 @@ class AudioEngine {
     if (this.track && this.musicOn) void this.track.el.play().catch(() => {})
     if (this.started) return
     this.started = true
-    this.startRoomTone()
-    this.startWind()
     this.nextChordAt = this.ctx.currentTime + 0.5
+    if (isTouch) {
+      void this.prerenderSteps()
+      if (!this.phone.url) void this.startGeneratedLoop()
+    }
     setInterval(() => {
-      this.scheduleMusic()
+      if (!isTouch) this.scheduleMusic()
       this.scheduleBirds()
     }, 500)
     this.applyMusicGain()
@@ -90,6 +120,7 @@ class AudioEngine {
 
   /** Use an uploaded song as the museum soundtrack (null → generated ambient music). */
   setTrack(url: string | null) {
+    if (isTouch) return this.setPhoneTrack(url)
     if (this.track) {
       this.track.el.pause()
       this.track.node.disconnect()
@@ -122,119 +153,112 @@ class AudioEngine {
     this.applyMusicGain()
   }
 
+  /** Phones: the whole song decoded once, then looped from memory. */
+  private setPhoneTrack(url: string | null) {
+    const ph = this.phone
+    if (url === ph.url) return
+    ph.url = url
+    ph.song?.stop()
+    ph.song = null
+    if (!url) {
+      if (this.started) void this.startGeneratedLoop()
+      this.applyMusicGain()
+      return
+    }
+    ph.generated?.stop()
+    ph.generated = null
+    this.applyMusicGain()
+    void (async () => {
+      try {
+        const data = await (await fetch(url)).arrayBuffer()
+        const buffer = await this.ctx.decodeAudioData(data)
+        if (ph.url !== url) return
+        const src = this.ctx.createBufferSource()
+        src.buffer = buffer
+        src.loop = true
+        src.connect(this.musicBus)
+        src.start()
+        ph.song = src
+      } catch {
+        // Couldn't load it: the museum's own music instead
+        if (ph.url === url && this.started) void this.startGeneratedLoop()
+      }
+    })()
+  }
+
+  /** Phones: one full round of the ambient pad rendered offline, looped seamlessly. */
+  private async startGeneratedLoop() {
+    const ph = this.phone
+    if (ph.generated || ph.url) return
+    const rate = this.ctx.sampleRate
+    const cycle = CHORDS.length * CHORD_LEN
+    // Render two rounds and keep the second: it opens with the first round's fading tails, so the loop has no seam
+    const off = new OfflineAudioContext(1, Math.ceil(rate * cycle * 2), rate)
+    const filter = off.createBiquadFilter()
+    filter.type = 'lowpass'
+    filter.frequency.value = 2200
+    filter.connect(off.destination)
+    const chimes = chimePlan()
+    for (let round = 0; round < 2; round++) {
+      CHORDS.forEach((chord, i) => {
+        const t = round * cycle + i * CHORD_LEN
+        padChord(off, filter, chord, t)
+        for (const c of chimes[i]) chime(off, filter, c.note, t + c.at)
+      })
+    }
+    const rendered = await off.startRendering()
+    if (ph.generated || ph.url) return
+    const loop = this.ctx.createBuffer(1, Math.ceil(rate * cycle), rate)
+    loop.copyToChannel(rendered.getChannelData(0).subarray(Math.ceil(rate * cycle)), 0)
+    const src = this.ctx.createBufferSource()
+    src.buffer = loop
+    src.loop = true
+    src.connect(this.musicBus)
+    src.start()
+    ph.generated = src
+  }
+
+  /** Phones: a handful of footsteps made once, picked at random as she walks. */
+  private async prerenderSteps() {
+    const rate = this.ctx.sampleRate
+    for (let i = 0; i < 6; i++) {
+      const off = new OfflineAudioContext(1, Math.ceil(rate * 0.16), rate)
+      const noise = off.createBuffer(1, this.noise.length, rate)
+      noise.copyToChannel(this.noise.getChannelData(0), 0)
+      synthStep(off, off.destination, noise, 0, 1)
+      this.phone.steps.push(await off.startRendering())
+    }
+  }
+
   private applyMusicGain() {
     // A mastered song is much louder than the soft synth pad, so it gets its own level
-    const level = this.track ? 0.42 : 0.05
-    const target = !this.musicOn ? 0 : this.ducks.size ? level * 0.25 : level
+    const level = this.track || this.phone.url ? 0.07 : 0.012
+    // Under a voice note or film the music all but stops, so nothing talks over it
+    const target = !this.musicOn ? 0 : this.ducks.size ? level * 0.08 : level
     this.musicBus.gain.setTargetAtTime(target, this.ctx.currentTime, 0.6)
   }
 
   /** Hard-soled shoe on polished concrete: heel thump + click, then toe click. */
   footstep(intensity: number) {
     if (!this.started) return
-    const ctx = this.ctx
-    const t = ctx.currentTime
-    const v = 0.22 * intensity * (0.85 + Math.random() * 0.3)
-
-    const click = (at: number, gain: number, freq: number) => {
-      const src = ctx.createBufferSource()
-      src.buffer = this.noise
-      src.playbackRate.value = 0.8 + Math.random() * 0.4
-      const bp = ctx.createBiquadFilter()
-      bp.type = 'bandpass'
-      bp.frequency.value = freq
-      bp.Q.value = 1.1
-      const g = ctx.createGain()
-      g.gain.setValueAtTime(0, at)
-      g.gain.linearRampToValueAtTime(gain, at + 0.003)
-      g.gain.exponentialRampToValueAtTime(0.0008, at + 0.07)
-      src.connect(bp).connect(g)
-      g.connect(this.listener.getInput())
-      g.connect(this.reverbIn)
-      src.start(at)
-      src.stop(at + 0.1)
+    // Barely there: just enough to feel the floor underfoot
+    const v = 0.012 * intensity * (0.85 + Math.random() * 0.3)
+    const steps = this.phone.steps
+    if (isTouch) {
+      if (!steps.length) return
+      const src = this.ctx.createBufferSource()
+      src.buffer = steps[Math.floor(Math.random() * steps.length)]
+      const g = this.ctx.createGain()
+      g.gain.value = v
+      src.connect(g).connect(this.listener.getInput())
+      src.start()
+      return
     }
-
-    const thump = ctx.createOscillator()
-    thump.frequency.setValueAtTime(130, t)
-    thump.frequency.exponentialRampToValueAtTime(55, t + 0.06)
-    const tg = ctx.createGain()
-    tg.gain.setValueAtTime(0, t)
-    tg.gain.linearRampToValueAtTime(v * 0.9, t + 0.004)
-    tg.gain.exponentialRampToValueAtTime(0.0008, t + 0.08)
-    thump.connect(tg).connect(this.listener.getInput())
-    thump.start(t)
-    thump.stop(t + 0.1)
-
-    click(t, v, 1100 + Math.random() * 500)
-    click(t + 0.04 + Math.random() * 0.015, v * 0.45, 2200 + Math.random() * 600)
-  }
-
-  /** Very quiet filtered brown noise — the "air" of a big room. */
-  private startRoomTone() {
-    const ctx = this.ctx
-    const len = ctx.sampleRate * 4
-    const buf = ctx.createBuffer(2, len, ctx.sampleRate)
-    for (let c = 0; c < 2; c++) {
-      const d = buf.getChannelData(c)
-      let last = 0
-      for (let i = 0; i < len; i++) {
-        last = (last + 0.02 * (Math.random() * 2 - 1)) / 1.02
-        d[i] = last * 3.5
-      }
-    }
-    const src = ctx.createBufferSource()
-    src.buffer = buf
-    src.loop = true
-    const lp = ctx.createBiquadFilter()
-    lp.type = 'lowpass'
-    lp.frequency.value = 380
-    const g = ctx.createGain()
-    g.gain.value = 0.05 * (1 - this.outdoor)
-    src.connect(lp).connect(g).connect(this.listener.getInput())
-    src.start()
-    this.roomToneGain = g
-  }
-
-  private brownNoise(seconds: number) {
-    const ctx = this.ctx
-    const len = ctx.sampleRate * seconds
-    const buf = ctx.createBuffer(2, len, ctx.sampleRate)
-    for (let c = 0; c < 2; c++) {
-      const d = buf.getChannelData(c)
-      let last = 0
-      for (let i = 0; i < len; i++) {
-        last = (last + 0.02 * (Math.random() * 2 - 1)) / 1.02
-        d[i] = last * 3.5
-      }
-    }
-    return buf
-  }
-
-  /** Soft gusting wind for the plaza. */
-  private startWind() {
-    const ctx = this.ctx
-    const src = ctx.createBufferSource()
-    src.buffer = this.brownNoise(6)
-    src.loop = true
-    const bp = ctx.createBiquadFilter()
-    bp.type = 'bandpass'
-    bp.frequency.value = 420
-    bp.Q.value = 0.6
-    // Slow gusts
-    const gust = ctx.createOscillator()
-    gust.frequency.value = 0.09
-    const gustDepth = ctx.createGain()
-    gustDepth.gain.value = 0.35
-    const swell = ctx.createGain()
-    swell.gain.value = 0.65
-    gust.connect(gustDepth).connect(swell.gain)
-    const g = ctx.createGain()
-    g.gain.value = 0.12 * this.outdoor
-    src.connect(bp).connect(swell).connect(g).connect(this.listener.getInput())
-    src.start()
-    gust.start()
-    this.windGain = g
+    const g = this.ctx.createGain()
+    g.gain.value = v
+    g.connect(this.listener.getInput())
+    g.connect(this.reverbIn)
+    synthStep(this.ctx, g, this.noise, this.ctx.currentTime, 1)
   }
 
   /** Short two-note chirps now and then while outside. */
@@ -268,12 +292,168 @@ class AudioEngine {
     this.nextBirdAt = t + 2.5 + Math.random() * 6
   }
 
-  /** 1 = on the plaza (wind, birds), 0 = inside (gallery hum). */
+  /** 1 = on the plaza (birds), 0 = inside (quiet). */
   setOutdoor(f: number) {
     this.outdoor = f
-    const t = this.ctx.currentTime
-    this.windGain?.gain.setTargetAtTime(0.12 * f, t, 0.3)
-    this.roomToneGain?.gain.setTargetAtTime(0.05 * (1 - f), t, 0.3)
+  }
+
+  /**
+   * Firework sounds, rendered once ahead of the show (so playing one is just a
+   * buffer, even on a phone): a few different shell bursts — the sharp crack,
+   * the chest-deep boom, and its echoes rolling back off the buildings — some
+   * with a crackling tail, and the thump of a mortar sending a shell up.
+   */
+  async prepareFireworks() {
+    if (this.fw || this.fwPending) return
+    this.fwPending = true
+    const rate = this.ctx.sampleRate
+    const render = async (seconds: number, build: (off: OfflineAudioContext, bus: AudioNode) => void, wet: number) => {
+      const off = new OfflineAudioContext(1, Math.ceil(rate * seconds), rate)
+      const bus = off.createGain()
+      bus.connect(off.destination)
+      const air = off.createConvolver()
+      air.buffer = outdoorEcho(off, seconds - 0.6)
+      const wetGain = off.createGain()
+      wetGain.gain.value = wet
+      bus.connect(air).connect(wetGain).connect(off.destination)
+      build(off, bus)
+      const buf = await off.startRendering()
+      // Level every sound to the same peak
+      const d = buf.getChannelData(0)
+      let peak = 0
+      for (let i = 0; i < d.length; i++) peak = Math.max(peak, Math.abs(d[i]))
+      if (peak > 0) for (let i = 0; i < d.length; i++) d[i] *= 0.9 / peak
+      return buf
+    }
+    const white = (off: OfflineAudioContext, seconds: number) => {
+      const b = off.createBuffer(1, Math.ceil(rate * seconds), rate)
+      const d = b.getChannelData(0)
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1
+      return b
+    }
+    /** Noise through a filter with a struck envelope: up in `attack`, away by `end`. */
+    const hit = (off: OfflineAudioContext, out: AudioNode, o: { at: number; type: BiquadFilterType; from: number; to?: number; q?: number; gain: number; attack: number; end: number; rate?: number }) => {
+      const src = off.createBufferSource()
+      src.buffer = white(off, o.end + 0.05)
+      src.playbackRate.value = o.rate ?? 1
+      const f = off.createBiquadFilter()
+      f.type = o.type
+      f.Q.value = o.q ?? 0.7
+      f.frequency.setValueAtTime(o.from, o.at)
+      if (o.to) f.frequency.exponentialRampToValueAtTime(o.to, o.at + o.end * 0.5)
+      const g = off.createGain()
+      g.gain.setValueAtTime(0, o.at)
+      g.gain.linearRampToValueAtTime(o.gain, o.at + o.attack)
+      g.gain.exponentialRampToValueAtTime(0.0005, o.at + o.end)
+      src.connect(f).connect(g).connect(out)
+      src.start(o.at)
+      src.stop(o.at + o.end + 0.02)
+    }
+    const thud = (off: OfflineAudioContext, out: AudioNode, at: number, from: number, to: number, gain: number, end: number) => {
+      const osc = off.createOscillator()
+      osc.frequency.setValueAtTime(from, at)
+      osc.frequency.exponentialRampToValueAtTime(to, at + end * 0.6)
+      const g = off.createGain()
+      g.gain.setValueAtTime(0, at)
+      g.gain.linearRampToValueAtTime(gain, at + 0.006)
+      g.gain.exponentialRampToValueAtTime(0.0005, at + end)
+      osc.connect(g).connect(out)
+      osc.start(at)
+      osc.stop(at + end + 0.02)
+    }
+    /** A shell bursting: `size` 0 (small, sharp) … 1 (big, deep). */
+    const burst = (off: OfflineAudioContext, bus: AudioNode, size: number, body = 1) => {
+      const t = 0.02
+      hit(off, bus, { at: t, type: 'highpass', from: 900 - size * 400, gain: 0.9, attack: 0.001, end: 0.05 + size * 0.03 })
+      hit(off, bus, { at: t, type: 'lowpass', from: 1600 - size * 500, to: 150 - size * 50, gain: 1.3 * body, attack: 0.004, end: 0.6 + size * 0.35 })
+      thud(off, bus, t, 95 - size * 25, 38 - size * 8, 0.9 * body, 0.5 + size * 0.3)
+    }
+
+    try {
+      const bursts = [
+        await render(3.6, (off, bus) => burst(off, bus, 0.2), 0.55),
+        await render(3.6, (off, bus) => burst(off, bus, 0.6), 0.6),
+        await render(3.8, (off, bus) => burst(off, bus, 1), 0.7),
+      ]
+      const crackles: AudioBuffer[] = []
+      for (const size of [0.3, 0.7]) {
+        crackles.push(
+          await render(
+            4,
+            (off, bus) => {
+              burst(off, bus, size, 0.7)
+              // The stars spitting and popping as they burn out, thinning towards the end
+              for (let k = 0; k < 110; k++) {
+                const at = 0.3 + Math.random() ** 1.6 * 2.1
+                hit(off, bus, { at, type: 'bandpass', from: 2200 + Math.random() * 4500, q: 1.6, gain: 0.12 + Math.random() * 0.35, attack: 0.001, end: 0.012 + Math.random() * 0.02, rate: 0.7 + Math.random() })
+              }
+            },
+            0.35,
+          ),
+        )
+      }
+      const launches: AudioBuffer[] = []
+      for (const v of [0, 1]) {
+        launches.push(
+          await render(
+            2.4,
+            (off, bus) => {
+              const t = 0.02
+              // The mortar's "thoomp", then the shell hissing upwards
+              hit(off, bus, { at: t, type: 'lowpass', from: 320 - v * 60, gain: 1, attack: 0.003, end: 0.2 })
+              thud(off, bus, t, 125 - v * 15, 46, 0.8, 0.22)
+              hit(off, bus, { at: t + 0.08, type: 'bandpass', from: 1500, to: 3400, q: 3.5, gain: 0.06, attack: 0.15, end: 1.2 })
+            },
+            0.3,
+          ),
+        )
+      }
+      // One bus for the whole show, pressed gently so a volley of shells never clips
+      const press = this.ctx.createDynamicsCompressor()
+      press.threshold.value = -12
+      press.ratio.value = 5
+      press.attack.value = 0.003
+      press.release.value = 0.25
+      press.connect(this.listener.getInput())
+      this.fw = { bursts, crackles, launches, bus: press }
+    } catch {
+      // No fireworks sound on this device; the show goes on silently
+    }
+    this.fwPending = false
+  }
+
+  private playFirework(buffer: AudioBuffer, volume: number, delay: number, cutoff: number) {
+    if (!this.fw) return
+    const ctx = this.ctx
+    const src = ctx.createBufferSource()
+    src.buffer = buffer
+    // No two shells sound quite alike
+    src.playbackRate.value = 0.86 + Math.random() * 0.26
+    // Distance takes the top off a sound
+    const lp = ctx.createBiquadFilter()
+    lp.type = 'lowpass'
+    lp.frequency.value = cutoff
+    const g = ctx.createGain()
+    g.gain.value = volume
+    src.connect(lp).connect(g).connect(this.fw.bus)
+    src.start(ctx.currentTime + delay)
+  }
+
+  /** A mortar sending a shell up. */
+  fireworkLaunch(volume: number) {
+    if (!this.started || !this.fw) return
+    const l = this.fw.launches
+    this.playFirework(l[Math.floor(Math.random() * l.length)], 0.4 * volume, 0, 5000)
+  }
+
+  /**
+   * A shell bursting, heard `delay` seconds later (sound takes its time to
+   * arrive). `volume` 0…1 by distance; `crackle`: with a crackling tail.
+   */
+  fireworkBurst(volume: number, delay: number, crackle: boolean) {
+    if (!this.started || !this.fw) return
+    const set = crackle ? this.fw.crackles : this.fw.bursts
+    this.playFirework(set[Math.floor(Math.random() * set.length)], 0.95 * volume, delay, 2200 + 9500 * volume)
   }
 
   /** A door swinging shut on its closer: a soft double thud and the latch. `volume`: quieter when it's further away. */
@@ -393,57 +573,137 @@ class AudioEngine {
   /** Slow, warm ambient pad (Cmaj9 → Am9 → Fmaj7#11 → G6) with sparse chimes. */
   private scheduleMusic() {
     const ctx = this.ctx
-    const CHORD_LEN = 9
-    const chords = [
-      [48, 55, 59, 62, 64],
-      [45, 52, 55, 59, 60],
-      [41, 48, 52, 55, 59],
-      [43, 50, 52, 55, 59],
-    ]
-    const chimes = [72, 74, 76, 79, 81, 84]
     if (this.track) {
       this.nextChordAt = Math.max(this.nextChordAt, ctx.currentTime)
       return
     }
     while (this.nextChordAt < ctx.currentTime + 2) {
       const t = this.nextChordAt
-      for (const note of chords[this.chordIndex % chords.length]) {
-        for (const detune of [-6, 6]) {
-          const osc = ctx.createOscillator()
-          osc.type = 'triangle'
-          osc.frequency.value = midi(note)
-          osc.detune.value = detune
-          const g = ctx.createGain()
-          g.gain.setValueAtTime(0, t)
-          g.gain.linearRampToValueAtTime(0.09, t + 3)
-          g.gain.setValueAtTime(0.09, t + CHORD_LEN - 1)
-          g.gain.linearRampToValueAtTime(0, t + CHORD_LEN + 2.5)
-          osc.connect(g).connect(this.musicInput)
-          osc.start(t)
-          osc.stop(t + CHORD_LEN + 3)
-        }
-      }
-      for (let i = 0; i < 3; i++) {
-        if (Math.random() < 0.35) continue
-        const at = t + 1 + Math.random() * (CHORD_LEN - 2)
-        const osc = ctx.createOscillator()
-        osc.type = 'sine'
-        osc.frequency.value = midi(chimes[Math.floor(Math.random() * chimes.length)])
-        const g = ctx.createGain()
-        g.gain.setValueAtTime(0, at)
-        g.gain.linearRampToValueAtTime(0.12, at + 0.02)
-        g.gain.exponentialRampToValueAtTime(0.0005, at + 3.5)
-        osc.connect(g).connect(this.musicInput)
-        osc.start(at)
-        osc.stop(at + 3.6)
-      }
+      padChord(ctx, this.musicInput, CHORDS[this.chordIndex % CHORDS.length], t)
+      for (const c of chimePlan()[0]) chime(ctx, this.musicInput, c.note, t + c.at)
       this.nextChordAt += CHORD_LEN
       this.chordIndex++
     }
   }
 }
 
+const CHORD_LEN = 9
+const CHORDS = [
+  [48, 55, 59, 62, 64],
+  [45, 52, 55, 59, 60],
+  [41, 48, 52, 55, 59],
+  [43, 50, 52, 55, 59],
+]
+const CHIMES = [72, 74, 76, 79, 81, 84]
+
+/** Up to three chimes per chord, at random moments. */
+function chimePlan() {
+  return CHORDS.map(() => {
+    const out: { note: number; at: number }[] = []
+    for (let i = 0; i < 3; i++) {
+      if (Math.random() < 0.35) continue
+      out.push({ note: CHIMES[Math.floor(Math.random() * CHIMES.length)], at: 1 + Math.random() * (CHORD_LEN - 2) })
+    }
+    return out
+  })
+}
+
+function padChord(ctx: BaseAudioContext, out: AudioNode, chord: number[], t: number) {
+  for (const note of chord) {
+    for (const detune of [-6, 6]) {
+      const osc = ctx.createOscillator()
+      osc.type = 'triangle'
+      osc.frequency.value = midi(note)
+      osc.detune.value = detune
+      const g = ctx.createGain()
+      g.gain.setValueAtTime(0, t)
+      g.gain.linearRampToValueAtTime(0.09, t + 3)
+      g.gain.setValueAtTime(0.09, t + CHORD_LEN - 1)
+      g.gain.linearRampToValueAtTime(0, t + CHORD_LEN + 2.5)
+      osc.connect(g).connect(out)
+      osc.start(t)
+      osc.stop(t + CHORD_LEN + 3)
+    }
+  }
+}
+
+function chime(ctx: BaseAudioContext, out: AudioNode, note: number, at: number) {
+  const osc = ctx.createOscillator()
+  osc.type = 'sine'
+  osc.frequency.value = midi(note)
+  const g = ctx.createGain()
+  g.gain.setValueAtTime(0, at)
+  g.gain.linearRampToValueAtTime(0.12, at + 0.02)
+  g.gain.exponentialRampToValueAtTime(0.0005, at + 3.5)
+  osc.connect(g).connect(out)
+  osc.start(at)
+  osc.stop(at + 3.6)
+}
+
+/** Hard-soled shoe on polished concrete: heel thump + click, then toe click (at full level; `out` sets the volume). */
+function synthStep(ctx: BaseAudioContext, out: AudioNode, noise: AudioBuffer, t: number, v: number) {
+  const click = (at: number, gain: number, freq: number) => {
+    const src = ctx.createBufferSource()
+    src.buffer = noise
+    src.playbackRate.value = 0.8 + Math.random() * 0.4
+    const bp = ctx.createBiquadFilter()
+    bp.type = 'bandpass'
+    bp.frequency.value = freq
+    bp.Q.value = 1.1
+    const g = ctx.createGain()
+    g.gain.setValueAtTime(0, at)
+    g.gain.linearRampToValueAtTime(gain, at + 0.003)
+    g.gain.exponentialRampToValueAtTime(0.0008, at + 0.07)
+    src.connect(bp).connect(g).connect(out)
+    src.start(at)
+    src.stop(at + 0.1)
+  }
+
+  const thump = ctx.createOscillator()
+  thump.frequency.setValueAtTime(130, t)
+  thump.frequency.exponentialRampToValueAtTime(55, t + 0.06)
+  const tg = ctx.createGain()
+  tg.gain.setValueAtTime(0, t)
+  tg.gain.linearRampToValueAtTime(v * 0.9, t + 0.004)
+  tg.gain.exponentialRampToValueAtTime(0.0008, t + 0.08)
+  thump.connect(tg).connect(out)
+  thump.start(t)
+  thump.stop(t + 0.1)
+
+  click(t, v, 1100 + Math.random() * 500)
+  click(t + 0.04 + Math.random() * 0.015, v * 0.45, 2200 + Math.random() * 600)
+}
+
 const midi = (n: number) => 440 * 2 ** ((n - 69) / 12)
+
+/**
+ * How a bang sounds outdoors at night: a few distinct echoes off the buildings
+ * around, then a long dark rumble rolling away.
+ */
+function outdoorEcho(ctx: BaseAudioContext, seconds: number) {
+  const rate = ctx.sampleRate
+  const len = Math.floor(rate * seconds)
+  const buf = ctx.createBuffer(1, len, rate)
+  const d = buf.getChannelData(0)
+  // Rumble: noise with the highs taken off, dying away
+  let low = 0
+  for (let i = Math.floor(rate * 0.05); i < len; i++) {
+    low += 0.07 * (Math.random() * 2 - 1 - low)
+    d[i] = low * 2.2 * Math.exp((-i / rate) * 2.4)
+  }
+  // Slap-backs: each a slightly smeared (duller) copy
+  for (const [at, amp] of [
+    [0.19, 0.8],
+    [0.34, 0.55],
+    [0.58, 0.4],
+    [0.93, 0.25],
+  ]) {
+    const i0 = Math.floor(rate * at * (0.9 + Math.random() * 0.2))
+    const smear = Math.floor(rate * 0.0012)
+    for (let k = 0; k < smear && i0 + k < len; k++) d[i0 + k] += (amp * (1 - k / smear)) / (smear * 0.5)
+  }
+  return buf
+}
 
 /** Synthetic stereo impulse response: short pre-delay, exponentially decaying noise. */
 function impulseResponse(ctx: BaseAudioContext, seconds: number, decay: number) {

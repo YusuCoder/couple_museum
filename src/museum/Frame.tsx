@@ -7,7 +7,10 @@ import { audio } from './audio'
 import { INTRO, INTRO_FILM, PANELS, ROOM, type Exhibit } from './exhibits'
 import { LightPool } from './LightPool'
 import { SHAPES } from './floorplan'
-import { remoteBodies, shareWorld } from './presence'
+import { SKYLIGHT_CENTRE } from '../content/layout'
+import { playerState } from './Player'
+import { everyone, remoteBodies, shareWorld } from './presence'
+import { LIGHT_CIRCLE } from './Skylight'
 import { isTouch } from './touch'
 import { filmElements, filmEpochs, filmTime, voiceTriggers } from './world'
 import { RoomCtx } from './roomContext'
@@ -298,10 +301,11 @@ const _world = new THREE.Vector3()
  * "3D headphones" model costs far more) and no hall reverb, so a film's
  * voice plays clean without starving the audio thread. Desktop keeps both.
  */
-function exhibitSound(listener: THREE.AudioListener, reverbIn: AudioNode) {
+function exhibitSound(listener: THREE.AudioListener, reverbIn: AudioNode, echoIn?: AudioNode) {
   const sound = new THREE.PositionalAudio(listener)
   if (isTouch) sound.panner.panningModel = 'equalpower'
   else sound.getOutput().connect(reverbIn)
+  if (echoIn) sound.getOutput().connect(echoIn)
   return sound
 }
 
@@ -334,7 +338,7 @@ function VoiceNote({ exhibit, media }: { exhibit: Exhibit; media: MediaRef }) {
 
   useEffect(() => {
     const a = audio()
-    const sound = exhibitSound(a.listener, a.reverbIn)
+    const sound = exhibitSound(a.listener, a.reverbIn, a.echoIn)
     sound.setRefDistance(1.2)
     sound.setRolloffFactor(1.6)
     sound.setDirectionalCone(150, 280, 0.35)
@@ -414,6 +418,10 @@ function VideoScreen({
   const ducked = useRef(false)
   const retryAt = useRef(0)
   const checkAt = useRef(0)
+  const room = useContext(RoomCtx)
+  // The Skylight room's big film, hanging in the beam: dark until someone steps into the light
+  const inTheLight = room.shape === 'rotunda' && exhibit.x === 0 && exhibit.z === SKYLIGHT_CENTRE.z
+  const showing = useRef(false)
   const [tex, setTex] = useState<THREE.VideoTexture | null>(null)
   const key = `video:${exhibit.id}`
 
@@ -473,7 +481,23 @@ function VideoScreen({
     for (const b of remoteBodies.values()) closest = Math.min(closest, Math.hypot(b.position.x - _world.x, b.position.z - _world.z))
     filmDistance.set(exhibit.id, closest)
     // A phone decodes one film at a time: the closest
-    const near = mode !== 'intro' && mode !== 'paused' && closest < 9 && (!isTouch || nearestFilm() === exhibit.id)
+    let near = mode !== 'intro' && mode !== 'paused' && closest < 9 && (!isTouch || nearestFilm() === exhibit.id)
+    if (inTheLight) {
+      if (!showing.current) {
+        const lit = (p: THREE.Vector3) => Math.hypot(p.x, p.z - room.z) < LIGHT_CIRCLE
+        if (everyone(playerState.position).some(lit)) {
+          showing.current = true
+          // Whoever stepped in starts it from the beginning, for both
+          if (lit(playerState.position)) {
+            const epoch = Date.now()
+            filmEpochs.set(exhibit.id, epoch)
+            shareWorld({ kind: 'film', id: exhibit.id, epoch })
+            el.pause()
+          }
+        }
+      } else if (closest >= 9) showing.current = false // everyone has left: next time, from the start
+      near = near && showing.current
+    }
 
     if (near && el.paused && clock.elapsedTime > retryAt.current) {
       // Pick up where the shared clock says the film is, so both visitors see the same moment

@@ -211,6 +211,41 @@ kbd {
   margin: 0;
   font-style: italic;
   opacity: 0.85;
+  /* Two lines at most until "Read more" */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
+.caption-text--open {
+  display: block;
+  max-height: 32vh;
+  overflow-y: auto;
+}
+
+.caption-more {
+  margin-top: 4px;
+  padding: 2px 6px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-family: system-ui, sans-serif;
+  font-size: 12px;
+  text-decoration: underline;
+  opacity: 0.75;
+  cursor: pointer;
+}
+
+/* Tucked away: just the buttons, on a light strip */
+.caption--hidden {
+  padding: 8px 10px;
+  background: rgba(18, 14, 11, 0.45);
+}
+
+.caption--hidden .caption-actions {
+  margin-top: 0;
 }
 
 .caption-actions {
@@ -330,8 +365,12 @@ kbd {
 .prompt--tap {
   pointer-events: auto;
   cursor: pointer;
-  bottom: calc(190px + env(safe-area-inset-bottom));
-  max-width: calc(100% - 32px);
+  /* Bottom right, under the right thumb (the stick is bottom left) */
+  left: auto;
+  right: max(16px, env(safe-area-inset-right));
+  bottom: calc(44px + env(safe-area-inset-bottom));
+  transform: none;
+  max-width: min(58%, 260px);
   white-space: normal;
   text-align: center;
   border: 1px solid rgba(245, 239, 230, 0.3);
@@ -342,9 +381,8 @@ kbd {
     bottom: calc(12px + env(safe-area-inset-bottom));
     padding: 14px 16px 12px;
   }
-  .caption-text {
-    max-height: 30vh;
-    overflow-y: auto;
+  .caption-text--open {
+    max-height: 26vh;
   }
 }
 

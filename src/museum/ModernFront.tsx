@@ -1,16 +1,14 @@
-import { useLayoutEffect, useMemo, useRef, type ReactNode } from 'react'
+import { useLayoutEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
-import { useFrame } from '@react-three/fiber'
-import { MeshReflectorMaterial } from '@react-three/drei'
 import { CuboidCollider, CylinderCollider, RigidBody } from '@react-three/rapier'
 
 import { BUILDING_HALF_WIDTH, FACADE, FACADE_HALF, GATE } from './floorplan'
 import { LightPool } from './LightPool'
+import { FlowerBed, GroundGlow, LAMP_HEIGHT, LampPost, StringLights } from './Night'
 import { wallMaterial } from './Room'
 import { SolidBox, faces } from './SolidBox'
 import { useMuseum } from './store'
 import { brassLettersTexture, concreteTexture, facadeConcreteTexture, foliageTexture } from './textures'
-import { isTouch } from './touch'
 
 const HALF = FACADE_HALF
 const D = FACADE.depth
@@ -23,7 +21,7 @@ const FRAME = 0.12
 const PANE_X = [GATE.width / 2 + FRAME + PANE.w / 2, GATE.width / 2 + FRAME * 2 + PANE.w * 1.5]
 const BAY_HALF = PANE_X[1] + PANE.w / 2 + FRAME
 const CANOPY = { y: 5.3, depth: 4.2, width: 11.5, t: 0.22 }
-/** Raised reflecting pools either side of the entry path. */
+/** Raised flower beds either side of the entry path (where reflecting pools once were). */
 const POOL = { x1: 2.6, x2: 12.5, z1: 7, z2: 18, rim: 0.32, rimT: 0.3 }
 
 function concrete(width: number, height: number) {
@@ -36,7 +34,7 @@ function concrete(width: number, height: number) {
  * Contemporary front in the language of the galleries inside: a quiet
  * board-marked concrete volume, a glowing glass entrance bay under a thin
  * cantilevered canopy, brass lettering, the gallery's dark green on the doors,
- * bronze fins on one wing, and reflecting pools either side of the path.
+ * bronze fins on one wing, and flower beds under garden lights either side of the path.
  */
 export function ModernFront({ length }: { length: number }) {
   const names = useMuseum((s) => s.names)
@@ -72,6 +70,11 @@ export function ModernFront({ length }: { length: number }) {
       slot: new THREE.MeshStandardMaterial({ color: '#000', emissive: '#ffcf8f', emissiveIntensity: 1.6, toneMapped: false }),
       strip: new THREE.MeshStandardMaterial({ color: '#000', emissive: '#fff1db', emissiveIntensity: 2.4, toneMapped: false }),
       cypress: new THREE.MeshStandardMaterial({ map: cypress, roughness: 1 }),
+      groundCover: (() => {
+        const t = foliageTexture('#26401d')
+        t.repeat.set(6, 6)
+        return new THREE.MeshStandardMaterial({ map: t, roughness: 1 })
+      })(),
       trunk: new THREE.MeshStandardMaterial({ color: '#3b2d22', roughness: 1 }),
     }
   }, [wingW, length])
@@ -107,7 +110,7 @@ export function ModernFront({ length }: { length: number }) {
           <CylinderCollider key={s} args={[CANOPY.y / 2, 0.12]} position={[s * (CANOPY.width / 2 - 0.4), CANOPY.y / 2, D + CANOPY.depth - 0.35]} />
         ))}
 
-        {/* Pool rims (you walk around the water, not through it) */}
+        {/* Planter rims (you walk around the flowers, not through them) */}
         {[-1, 1].map((s) => (
           <CuboidCollider
             key={s}
@@ -119,6 +122,10 @@ export function ModernFront({ length }: { length: number }) {
         {/* Cypresses */}
         {CYPRESSES.map(([x, z]) => (
           <CylinderCollider key={`${x},${z}`} args={[1.5, 0.45]} position={[x, 1.5, z]} />
+        ))}
+
+        {LAMPS.map(([x, z]) => (
+          <CylinderCollider key={`l${x},${z}`} args={[LAMP_HEIGHT / 2, 0.1]} position={[x, LAMP_HEIGHT / 2, z]} />
         ))}
 
         {/* Bollards along the path */}
@@ -216,15 +223,28 @@ export function ModernFront({ length }: { length: number }) {
       {/* Right wing: vertical bronze fins */}
       <Fins positions={fins} material={m.bronze} />
 
-      {/* Entry path, reflecting pools in raised concrete basins */}
+      {/* Entry path between two raised flower beds */}
       <mesh position={[0, 0.03, (POOL.z1 + POOL.z2) / 2 - 1]} material={m.path}>
         <boxGeometry args={[POOL.x1 * 2 - 0.1, 0.06, POOL.z2 - POOL.z1 + 6]} />
       </mesh>
-      <Water>
-        {[-1, 1].map((s) => (
-          <Pool key={s} side={s} rim={m.rim} />
-        ))}
-      </Water>
+      {[-1, 1].map((s) => (
+        <Planter key={s} side={s} rim={m.rim} ground={m.groundCover} />
+      ))}
+
+      {/* Garden lights: lamp posts at the planters' outer corners, strings of bulbs across the plaza */}
+      {LAMPS.map(([x, z]) => (
+        <LampPost key={`${x},${z}`} x={x} z={z} />
+      ))}
+      {STRINGS.map(([from, to], i) => (
+        <StringLights key={i} from={from} to={to} sag={1.1} />
+      ))}
+      {/* Their light along the path */}
+      {[8.5, 12.5, 16.5].map((z) => (
+        <GroundGlow key={z} x={0} z={z} radius={3.2} strength={0.32} />
+      ))}
+      {BOLLARDS.map(([x, z]) => (
+        <GroundGlow key={`g${x},${z}`} x={x} z={z} radius={0.9} strength={0.45} />
+      ))}
 
       {BOLLARDS.map(([x, z]) => (
         <group key={`${x},${z}`} position={[x, 0, z]}>
@@ -255,6 +275,19 @@ const BOLLARDS: [number, number][] = [7.5, 11, 14.5, 18].flatMap((z) => [
   [-POOL.x1 + 0.35, z] as [number, number],
   [POOL.x1 - 0.35, z] as [number, number],
 ])
+/** Lamp posts just beyond the planters' outer corners. */
+const LAMPS: [number, number][] = [-1, 1].flatMap((s) => [
+  [s * (POOL.x2 + 0.8), POOL.z1 - 0.2] as [number, number],
+  [s * (POOL.x2 + 0.8), POOL.z2 + 0.2] as [number, number],
+])
+const LAMP_TOP = LAMP_HEIGHT + 0.05
+/** Bulb strings from lamp to lamp across the plaza, and one crisscross down the middle. */
+const STRINGS: [[number, number, number], [number, number, number]][] = [
+  [[-(POOL.x2 + 0.8), LAMP_TOP, POOL.z1 - 0.2], [POOL.x2 + 0.8, LAMP_TOP, POOL.z1 - 0.2]],
+  [[-(POOL.x2 + 0.8), LAMP_TOP, POOL.z2 + 0.2], [POOL.x2 + 0.8, LAMP_TOP, POOL.z2 + 0.2]],
+  [[-(POOL.x2 + 0.8), LAMP_TOP, POOL.z1 - 0.2], [POOL.x2 + 0.8, LAMP_TOP, POOL.z2 + 0.2]],
+  [[POOL.x2 + 0.8, LAMP_TOP, POOL.z1 - 0.2], [-(POOL.x2 + 0.8), LAMP_TOP, POOL.z2 + 0.2]],
+]
 const CYPRESSES: [number, number][] = [
   [-13.5, 3],
   [13.5, 3],
@@ -309,13 +342,14 @@ function canopyGlow() {
   return glow
 }
 
-/** One raised basin: concrete rim and a dark reflective water surface. */
-function Pool({ side, rim }: { side: number; rim: THREE.Material }) {
+/** One raised planter where the pools were: a low concrete rim brimming with flowers. */
+function Planter({ side, rim, ground }: { side: number; rim: THREE.Material; ground: THREE.Material }) {
   const w = POOL.x2 - POOL.x1
   const d = POOL.z2 - POOL.z1
   const cx = side * (POOL.x1 + POOL.x2) / 2
   const cz = (POOL.z1 + POOL.z2) / 2
   const t = POOL.rimT
+  const soil = POOL.rim - 0.04
   return (
     <group position={[cx, 0, cz]}>
       {/* Rim: four low walls */}
@@ -329,125 +363,12 @@ function Pool({ side, rim }: { side: number; rim: THREE.Material }) {
           <boxGeometry args={[t, POOL.rim, d - 2 * t]} />
         </mesh>
       ))}
-      <mesh rotation-x={-Math.PI / 2} position-y={POOL.rim - 0.06}>
+      <mesh rotation-x={-Math.PI / 2} position-y={soil} material={ground}>
         <planeGeometry args={[w - 2 * t, d - 2 * t]} />
-        {/*
-          The reflector shades as  colour × ((1 − mirror) + reflection × mixStrength),
-          so a light blue-green colour lets the sky and building come through at
-          their real brightness with a hint of water tint. Ripples: a drifting
-          normal map catches the sun; a redrawn distortion map wobbles the reflection.
-        */}
-        {isTouch ? (
-          <meshStandardMaterial color="#5f8a90" roughness={0.08} metalness={0.6} normalMap={waterMaps().normal} normalScale={new THREE.Vector2(0.18, 0.18)} />
-        ) : (
-        <MeshReflectorMaterial
-          color="#9cbfc3"
-          resolution={512}
-          mirror={0.72}
-          mixStrength={1.3}
-          blur={[60, 30]}
-          mixBlur={0.25}
-          roughness={0.06}
-          metalness={0.05}
-          normalMap={waterMaps().normal}
-          normalScale={new THREE.Vector2(0.18, 0.18)}
-          distortionMap={waterMaps().distortion}
-          distortion={0.018}
-          depthScale={0}
-        />
-        )}
       </mesh>
+      <FlowerBed width={w - 2 * t} depth={d - 2 * t} y={soil} seed={side > 0 ? 2 : 1} />
     </group>
   )
-}
-
-// ---------------------------------------------------------------- water
-
-let maps: { normal: THREE.CanvasTexture; distortion: THREE.CanvasTexture; heights: HTMLCanvasElement; ctx: CanvasRenderingContext2D } | null = null
-
-/** Soft tileable "noise" made of overlapping blobs, drawn wrapped so it repeats seamlessly. */
-function rippleHeights(size: number, seed: number) {
-  const c = document.createElement('canvas')
-  c.width = c.height = size
-  const ctx = c.getContext('2d')!
-  ctx.fillStyle = 'rgb(128,128,128)'
-  ctx.fillRect(0, 0, size, size)
-  let r = seed
-  const rand = () => ((r = (r * 1664525 + 1013904223) >>> 0) / 2 ** 32)
-  for (let i = 0; i < 90; i++) {
-    const x = rand() * size
-    const y = rand() * size
-    const rad = size * (0.04 + rand() * 0.12)
-    const light = rand() > 0.5
-    for (const dx of [-size, 0, size]) {
-      for (const dy of [-size, 0, size]) {
-        const g = ctx.createRadialGradient(x + dx, y + dy, 0, x + dx, y + dy, rad)
-        g.addColorStop(0, light ? 'rgba(255,255,255,0.22)' : 'rgba(0,0,0,0.22)')
-        g.addColorStop(1, 'rgba(128,128,128,0)')
-        ctx.fillStyle = g
-        ctx.fillRect(x + dx - rad, y + dy - rad, rad * 2, rad * 2)
-      }
-    }
-  }
-  return c
-}
-
-/** Normal map + distortion map shared by both pools. */
-function waterMaps() {
-  if (maps) return maps
-  // Normal map from a height field (finite differences)
-  const size = 256
-  const h = rippleHeights(size, 77).getContext('2d')!.getImageData(0, 0, size, size).data
-  const n = document.createElement('canvas')
-  n.width = n.height = size
-  const nctx = n.getContext('2d')!
-  const out = nctx.createImageData(size, size)
-  const at = (x: number, y: number) => h[(((y + size) % size) * size + ((x + size) % size)) * 4] / 255
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const dx = (at(x + 1, y) - at(x - 1, y)) * 3
-      const dy = (at(x, y + 1) - at(x, y - 1)) * 3
-      const len = Math.hypot(dx, dy, 1)
-      const i = (y * size + x) * 4
-      out.data[i] = ((-dx / len) * 0.5 + 0.5) * 255
-      out.data[i + 1] = ((-dy / len) * 0.5 + 0.5) * 255
-      out.data[i + 2] = (1 / len) * 255
-      out.data[i + 3] = 255
-    }
-  }
-  nctx.putImageData(out, 0, 0)
-  const normal = new THREE.CanvasTexture(n)
-  normal.wrapS = normal.wrapT = THREE.RepeatWrapping
-  normal.repeat.set(5, 5)
-
-  const dCanvas = document.createElement('canvas')
-  dCanvas.width = dCanvas.height = 128
-  const distortion = new THREE.CanvasTexture(dCanvas)
-  maps = { normal, distortion, heights: rippleHeights(128, 31), ctx: dCanvas.getContext('2d')! }
-  return maps
-}
-
-/** Animates the shared water maps (once per frame for all pools). */
-function Water({ children }: { children: ReactNode }) {
-  const last = useRef(0)
-  useFrame(({ clock }) => {
-    const m = waterMaps()
-    const t = clock.elapsedTime
-    m.normal.offset.set(t * 0.012, t * 0.007)
-    // Redraw the distortion map ~15×/s: two layers of ripples drifting in different directions
-    if (t - last.current < 1 / 15) return
-    last.current = t
-    const s = 128
-    const ox = (t * 6) % s
-    const oy = (t * 3.5) % s
-    m.ctx.globalAlpha = 1
-    for (const dx of [0, -s]) for (const dy of [0, -s]) m.ctx.drawImage(m.heights, ox + dx, oy + dy)
-    m.ctx.globalAlpha = 0.5
-    const ox2 = s - ((t * 4) % s)
-    for (const dx of [0, -s]) for (const dy of [0, s]) m.ctx.drawImage(m.heights, ox2 + dx, -oy + dy)
-    m.distortion.needsUpdate = true
-  })
-  return <>{children}</>
 }
 
 /** Bronze fins in one draw call. */

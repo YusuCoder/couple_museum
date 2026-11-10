@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import type { Exhibit } from './exhibits'
@@ -9,6 +9,80 @@ import { isTouch, stick } from './touch'
 
 /** How to trigger an action: a key on a desktop, a tap on a phone. */
 const ACT = isTouch ? 'Tap here' : null
+
+/** Whether the note panel is tucked away (kept while browsing from piece to piece). */
+let captionHidden = false
+
+/**
+ * The note under a piece being looked at. Kept short so it never covers the
+ * piece: a long note shows its first lines with "Read more", and the whole
+ * panel can be tucked away to just the buttons.
+ */
+function Caption({ ex }: { ex: Exhibit }) {
+  const [hidden, setHidden] = useState(captionHidden)
+  const [expanded, setExpanded] = useState(false)
+  const [long, setLong] = useState(false)
+  const text = useRef<HTMLParagraphElement>(null)
+  const media = mediaLabel(ex)
+
+  useEffect(() => setExpanded(false), [ex.id])
+  // Only offer "Read more" when the note is actually cut short
+  useLayoutEffect(() => {
+    const el = text.current
+    if (el && !expanded) setLong(el.scrollHeight > el.clientHeight + 1)
+  }, [ex.caption, expanded, hidden])
+
+  const hide = (h: boolean) => {
+    captionHidden = h
+    setHidden(h)
+  }
+
+  return (
+    <div className={`caption${hidden ? ' caption--hidden' : ''}`}>
+      {!hidden && (
+        <>
+          <p className="caption-date">{ex.date}</p>
+          <h2>{ex.title}</h2>
+          {ex.caption && (
+            <p ref={text} className={`caption-text${expanded ? ' caption-text--open' : ''}`}>
+              {ex.caption}
+            </p>
+          )}
+          {(long || expanded) && (
+            <button className="caption-more" onClick={() => setExpanded(!expanded)}>
+              {expanded ? 'Show less' : 'Read more'}
+            </button>
+          )}
+        </>
+      )}
+      <div className="caption-actions">
+        <button className="chip" onClick={() => stepView(-1)} aria-label="Previous exhibit">
+          ‹ Prev
+        </button>
+        {media && (
+          <button className="chip" onClick={() => exhibitRegistry.get(ex.id)?.replay?.()}>
+            Replay {media}
+          </button>
+        )}
+        <button className="chip" onClick={() => hide(!hidden)}>
+          {hidden ? 'Show note' : 'Hide note'}
+        </button>
+        <button className="chip chip--primary" onClick={() => exitView(true)}>
+          Back to walking
+        </button>
+        <button className="chip" onClick={() => stepView(1)} aria-label="Next exhibit">
+          Next ›
+        </button>
+      </div>
+      {!isTouch && !hidden && (
+        <p className="caption-keys">
+          <kbd>←</kbd>
+          <kbd>→</kbd> browse · <kbd>E</kbd> back
+        </p>
+      )}
+    </div>
+  )
+}
 
 /** Bottom-left thumb stick (touch screens): writes `stick` for the Player. */
 function Stick() {
@@ -175,37 +249,7 @@ export function Hud() {
     )
   }
 
-  if (mode === 'viewing' && viewingId) {
-    const ex = byId.get(viewingId)!
-    const media = mediaLabel(ex)
-    return (
-      <div className="caption">
-        <p className="caption-date">{ex.date}</p>
-        <h2>{ex.title}</h2>
-        <p className="caption-text">{ex.caption}</p>
-        <div className="caption-actions">
-          <button className="chip" onClick={() => stepView(-1)} aria-label="Previous exhibit">
-            ‹ Prev
-          </button>
-          {media && (
-            <button className="chip" onClick={() => exhibitRegistry.get(viewingId)?.replay?.()}>
-              Replay {media}
-            </button>
-          )}
-          <button className="chip chip--primary" onClick={() => exitView(true)}>
-            Back to walking
-          </button>
-          <button className="chip" onClick={() => stepView(1)} aria-label="Next exhibit">
-            Next ›
-          </button>
-        </div>
-        {!isTouch && <p className="caption-keys">
-          <kbd>←</kbd>
-          <kbd>→</kbd> browse · <kbd>E</kbd> back
-        </p>}
-      </div>
-    )
-  }
+  if (mode === 'viewing' && viewingId) return <Caption ex={byId.get(viewingId)!} />
 
   // walking / returning / sitting
   const focused = focusedId ? byId.get(focusedId) : undefined
