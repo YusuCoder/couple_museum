@@ -47,6 +47,12 @@ export const playerState = {
   teleport: null as null | { x: number; z: number; yaw?: number },
   /** Walk to this spot by itself (the embrace: she steps in close); any movement input cancels it. */
   steer: null as null | { x: number; z: number },
+  /**
+   * Hand in hand: a gentle help keeping in step with the partner while the
+   * visitor walks — `side` (m/s) drifts them to arm's length, `factor` paces
+   * them to the partner's speed. Never moves a visitor who is standing still.
+   */
+  pace: null as null | { side: THREE.Vector3; factor: number },
   /** Height the third-person camera must stay under (current room's ceiling, or open sky). */
   ceiling: 6,
 }
@@ -151,6 +157,7 @@ export function Player({ spawn }: { spawn: [number, number] }) {
           wish.multiplyScalar(push >= RUN_PUSH ? RUN : WALK * Math.max(push / RUN_PUSH, 0.45))
         }
       }
+      if (playerState.pace && wish.lengthSq() > 0) wish.multiplyScalar(playerState.pace.factor).add(playerState.pace.side)
       // Walking somewhere by itself until the visitor moves
       const goal = playerState.steer
       if (goal && wish.lengthSq() > 0) playerState.steer = null

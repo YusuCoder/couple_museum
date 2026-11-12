@@ -5,7 +5,7 @@ import { useFrame, useThree } from '@react-three/fiber'
 import { useAnimations, useGLTF } from '@react-three/drei'
 
 import type { Body } from './body'
-import { bodies, embraceHer, embraceHim, makeRig, rigs } from './embrace'
+import { bodies, embraceHer, embraceHim, holdHands, makeRig, rigs } from './embrace'
 import { CENTER_Y, RUN, WALK, playerState } from './Player'
 import { finishStanding, type Seat } from './Seats'
 import { useMuseum } from './store'
@@ -222,15 +222,18 @@ export function Avatar({ url, who, local, height, body, walkClip, walkSpeed, run
     actions.Run?.setEffectiveWeight(run * walking).setEffectiveTimeScale(THREE.MathUtils.clamp(speed / runSpeed, 0.6, 1.4))
   })
 
-  // After this frame's animation has been applied: the embrace bends the arms on top of it
+  // After this frame's animation has been applied: the embrace, or holding hands, bends the arms on top of it
   useFrame(() => {
     const k = THREE.MathUtils.smoothstep(body.embrace, 0, 1)
+    const h = THREE.MathUtils.smoothstep(body.hands, 0, 1)
     const me = rigs[who]
     const otherWho = who === 'him' ? 'her' : 'him'
     const other = rigs[otherWho]
     const otherBody = bodies[otherWho]
-    if (k <= 0 || !me || !other || !otherBody || !root.current) return
+    if ((k <= 0 && h <= 0) || !me || !other || !otherBody || !root.current) return
     root.current.updateMatrixWorld(true)
+    if (h > 0) holdHands(me, other, body.yaw, h)
+    if (k <= 0) return
     if (who === 'him') embraceHim(me, other, body.yaw, otherBody.yaw, k)
     else embraceHer(me, other, body.yaw, otherBody.yaw, k)
   })

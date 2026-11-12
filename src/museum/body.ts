@@ -19,6 +19,8 @@ export interface Body {
   holdYaw: number | null
   /** 0..1: how far into the embrace (both bodies share the same value). */
   embrace: number
+  /** 0..1: how far into holding hands with the partner walking alongside. */
+  hands: number
   /** Written by the Avatar: the facing actually shown. */
   yaw: number
   /** Written by the Avatar: how far the sit-down clip carries the hips back on to the seat (m). */
@@ -33,6 +35,7 @@ export function makeBody(): Body {
     faceYaw: null,
     holdYaw: null,
     embrace: 0,
+    hands: 0,
     yaw: 0,
     sitShift: 0.49,
   }

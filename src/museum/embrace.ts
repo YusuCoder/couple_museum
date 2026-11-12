@@ -152,3 +152,49 @@ export function embraceHer(me: Rig, him: Rig, myYaw: number, hisYaw: number, w: 
   lean(me.bone('Neck'), F, 0.1 * w)
   lean(me.bone('Head'), F, 0.12 * w)
 }
+
+const S1 = new THREE.Vector3()
+const S2 = new THREE.Vector3()
+const H1 = new THREE.Vector3()
+const H2 = new THREE.Vector3()
+
+/** Shoulder to wrist with the arm out straight. */
+function armLength(rig: Rig, side: 'Left' | 'Right') {
+  rig.bone(`${side}Arm`).getWorldPosition(_a)
+  rig.bone(`${side}ForeArm`).getWorldPosition(_b)
+  rig.bone(`${side}Hand`).getWorldPosition(_c)
+  return _a.distanceTo(_b) + _b.distanceTo(_c)
+}
+
+/**
+ * Walking hand in hand: the arm on the partner's side reaches down and across
+ * to meet theirs half-way between the two shoulders, as low as both can reach
+ * comfortably. Each figure poses its own arm; both work out the same meeting
+ * point, so the hands join.
+ */
+export function holdHands(me: Rig, other: Rig, myYaw: number, w: number) {
+  me.bone('Hips').getWorldPosition(H1)
+  other.bone('Hips').getWorldPosition(H2)
+  fwd(myYaw, F)
+  left(myYaw, L)
+  D.subVectors(H2, H1).setY(0)
+  const side = D.dot(L) > 0 ? 'Left' : 'Right'
+  me.bone(`${side}Arm`).getWorldPosition(S1)
+  // Their arm on my side: the shoulder nearer to me
+  const theirs = other.bone('LeftArm').getWorldPosition(S2).distanceToSquared(H1) < other.bone('RightArm').getWorldPosition(T).distanceToSquared(H1) ? 'Left' : 'Right'
+  other.bone(`${theirs}Arm`).getWorldPosition(S2)
+
+  const half = Math.hypot(S2.x - S1.x, S2.z - S1.z) / 2
+  // Elbows a little bent, not locked
+  const drop = (reach: number) => Math.sqrt(Math.max((reach * 0.9) ** 2 - half * half, 0.0004))
+  const y = Math.max(S1.y - drop(armLength(me, side)), S2.y - drop(armLength(other, theirs)))
+  D.subVectors(S2, S1).setY(0).normalize()
+  // My wrist stops just short of the middle, where the two palms meet
+  T.set((S1.x + S2.x) / 2, y, (S1.z + S2.z) / 2).addScaledVector(D, -0.045)
+  // Elbow behind and a touch out
+  P.copy(F).multiplyScalar(-1).addScaledVector(D, -0.25).addScaledVector(UP, -0.2)
+  twoBoneIK(me.bone(`${side}Arm`), me.bone(`${side}ForeArm`), me.bone(`${side}Hand`), T, P, w)
+  // Fingers down and round the other's hand
+  _u.copy(D).multiplyScalar(0.55).addScaledVector(UP, -0.8).addScaledVector(F, 0.1).normalize()
+  pointHand(me.bone(`${side}Hand`), me.bone(`${side}HandMiddle1`), _u, w)
+}

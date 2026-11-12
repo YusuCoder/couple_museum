@@ -616,6 +616,9 @@ function ShapePicker({ value, onChange }: { value: RoomShape; onChange: (s: Room
   )
 }
 
+/** "5 November, 14:32" in the reader's own language and time zone. */
+const when = (iso: string) => new Date(iso).toLocaleString(undefined, { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })
+
 function AccountBar({ cloud }: { cloud: CloudInfo }) {
   const [copied, setCopied] = useState(false)
   const link = inviteLink(cloud.museum.inviteCode)
@@ -641,15 +644,25 @@ function AccountBar({ cloud }: { cloud: CloudInfo }) {
           Sign out
         </button>
       </div>
-      {cloud.museum.visitCode && <VisitShare link={visitLink(cloud.museum.visitCode)} />}
+      {cloud.museum.visitCode && (
+        <VisitShare link={visitLink(cloud.museum.visitCode)} visitors={cloud.museum.visitors} lastVisitAt={cloud.museum.lastVisitAt} />
+      )}
       {cloud.museum.joinProblem && (
         <p className="error">Couldn’t join with that invite link: {cloud.museum.joinProblem}. You’re in your own museum for now.</p>
       )}
       {shared ? (
-        <p className="account-invite">♥ Shared with your partner. You both see and edit the same museum.</p>
+        <p className="account-invite">
+          ♥ Shared with your partner. You both see and edit the same museum.
+          {cloud.museum.partnerJoinedAt && (
+            <span className="muted">
+              {' '}
+              {cloud.museum.role === 'partner' ? 'You joined' : 'They joined'} on {when(cloud.museum.partnerJoinedAt)}.
+            </span>
+          )}
+        </p>
       ) : (
         <div className="account-invite">
-          <span>Invite your partner to edit it with you (they sign in):</span>
+          <span>Invite your partner to edit it with you (they sign in). Nobody has joined with this link yet:</span>
           <code className="invite-link">{link}</code>
           <button className="chip-btn" onClick={copy}>
             {copied ? 'Copied ✓' : 'Copy link'}
@@ -666,7 +679,7 @@ function AccountBar({ cloud }: { cloud: CloudInfo }) {
 }
 
 /** The no-sign-in link and its QR code: anyone who has it can walk through, nobody can change anything. */
-function VisitShare({ link }: { link: string }) {
+function VisitShare({ link, visitors, lastVisitAt }: { link: string; visitors: number; lastVisitAt?: string }) {
   const [copied, setCopied] = useState(false)
   const [qr, setQr] = useState<string | null>(null)
 
@@ -689,6 +702,11 @@ function VisitShare({ link }: { link: string }) {
       <p className="account-visit-head">
         <strong>Open it without signing in</strong>
         <span className="muted">Anyone with this link or QR code can walk through your museum. They can’t change anything.</span>
+        <span className="muted">
+          {visitors === 0
+            ? 'Nobody has opened it yet.'
+            : `Opened on ${visitors} ${visitors === 1 ? 'device' : 'devices'}${lastVisitAt ? `, last on ${when(lastVisitAt)}` : ''}.`}
+        </span>
       </p>
       <div className="account-invite">
         <code className="invite-link">{link}</code>

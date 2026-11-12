@@ -23,6 +23,11 @@ const STILL_BEFORE_HUG = 0.7
 const HUG_REACH = 1.8
 /** Further apart than this and the moment is over. */
 const HUG_BREAK = 2.4
+/**
+ * Holding hands: side by side this close (m) and facing the same way for a
+ * moment, the hands join; they let go when the two drift further than `away`.
+ */
+const HANDS = { near: 1.15, away: 1.6, apart: 0.74, dwell: 0.35, in: 0.45, out: 0.3 }
 
 const fwd = (yaw: number) => new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw))
 const left = (yaw: number) => new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw))
@@ -87,6 +92,7 @@ export function Together({ museumId, myId }: { museumId: string | null; myId: st
   }, [museumId, myId])
 
   useEmbrace()
+  useHoldHands()
   useSharedWorld()
 
   return (
@@ -202,5 +208,67 @@ function useEmbrace() {
     s.embrace = THREE.MathUtils.clamp(s.embrace + (target ? dt / HUG_IN : -dt / HUG_OUT), 0, 1)
     mine.embrace = s.embrace
     for (const b of remoteBodies.values()) b.embrace = s.embrace
+  })
+}
+
+const _to = new THREE.Vector3()
+const _side = new THREE.Vector3()
+
+/**
+ * Walking (or standing) side by side, close and facing the same way, the two
+ * take each other's hand. Each visitor's screen works it out from the two
+ * positions, so both see the hands join. While they walk, each is helped a
+ * little to stay at arm's length and in step with the other.
+ */
+function useHoldHands() {
+  const st = useRef({ on: false, dwell: 0, level: 0 })
+
+  useFrame((_, rawDt) => {
+    const dt = Math.min(rawDt, 0.05)
+    const s = st.current
+    const { me, mode } = useMuseum.getState()
+    const partner = partnerOf(me)
+    const other = partner ? remoteBodies.get(partner[0]) : undefined
+    const mine = playerState
+
+    let ok = false
+    if (other && mode === 'walking' && !mine.seat && !other.seat && mine.embrace <= 0 && !mine.steer) {
+      _to.subVectors(other.position, mine.position).setY(0)
+      const dist = _to.length()
+      const f = fwd(mine.yaw)
+      const ahead = Math.abs(_to.dot(f))
+      // Facing the same way (1) … opposite ways (-1)
+      const together = Math.cos(other.yaw - mine.yaw)
+      ok = s.on ? dist < HANDS.away && dist > 0.3 && ahead < 1 && together > 0.1 : dist < HANDS.near && dist > 0.45 && ahead < 0.6 && together > 0.55
+    }
+    if (s.on) {
+      if (!ok) s.on = false
+    } else {
+      s.dwell = ok ? s.dwell + dt : 0
+      if (s.dwell > HANDS.dwell) {
+        s.on = true
+        s.dwell = 0
+      }
+    }
+
+    s.level = THREE.MathUtils.clamp(s.level + (s.on ? dt / HANDS.in : -dt / HANDS.out), 0, 1)
+    mine.hands = s.level
+    for (const [id, b] of remoteBodies) b.hands = partner && id === partner[0] ? s.level : 0
+
+    if (s.on && other) {
+      // Where the partner is right now (their figure is shown a moment late)
+      _to.subVectors(other.position, mine.position).addScaledVector(other.velocity, 0.16).setY(0)
+      const speed = Math.hypot(mine.velocity.x, mine.velocity.z)
+      const f = speed > 0.2 ? _side.set(mine.velocity.x / speed, 0, mine.velocity.z / speed).clone() : fwd(mine.yaw)
+      // Across my direction of travel: drift to arm's length from them
+      _side.set(f.z, 0, -f.x)
+      const across = _to.dot(_side)
+      const drift = THREE.MathUtils.clamp((Math.abs(across) - HANDS.apart) * 2 * Math.sign(across), -0.4, 0.4)
+      // Along it: ease off when ahead of them, step out when behind
+      const lead = -_to.dot(f)
+      const pace = mine.pace ?? (mine.pace = { side: new THREE.Vector3(), factor: 1 })
+      pace.side.copy(_side).multiplyScalar(drift)
+      pace.factor = 1 - THREE.MathUtils.clamp(lead * 0.7, -0.3, 0.3)
+    } else mine.pace = null
   })
 }

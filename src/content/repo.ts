@@ -234,6 +234,11 @@ export interface CloudMuseum {
   visitCode?: string
   /** The couple: owner and partner (visitors from the visit link aren't counted). */
   members: number
+  /** When the partner joined with the invite link (ISO date), if they have. */
+  partnerJoinedAt?: string
+  /** People who opened the no-sign-in visit link (one per device), and when one last did. */
+  visitors: number
+  lastVisitAt?: string
   /** Who is signed in, and how they belong to this museum. */
   userId: string
   role: 'owner' | 'partner' | 'guest'
@@ -296,22 +301,25 @@ async function findOrCreateMuseum(joinCode?: string | null): Promise<CloudMuseum
     else museumId = data.id as string
   }
 
-  const [{ data: m, error: e3 }, { count }, { data: me }] = await Promise.all([
+  const [{ data: m, error: e3 }, { data: everyone }] = await Promise.all([
     // '*': works before and after the visit-links migration (visit_code)
     db.from('museums').select('*').eq('id', museumId).single(),
-    db
-      .from('museum_members')
-      .select('user_id', { count: 'exact', head: true })
-      .eq('museum_id', museumId)
-      .in('role', ['owner', 'partner']),
-    db.from('museum_members').select('role').eq('museum_id', museumId).eq('user_id', uid).maybeSingle(),
+    // Members can see each other: the couple, and visitors from the visit link
+    db.from('museum_members').select('user_id, role, joined_at').eq('museum_id', museumId),
   ])
   if (e3) throw e3
+  const rows = (everyone ?? []) as { user_id: string; role: CloudMuseum['role']; joined_at: string }[]
+  const me = rows.find((r) => r.user_id === uid)
+  const guests = rows.filter((r) => r.role === 'guest')
+  const count = rows.filter((r) => r.role !== 'guest').length || 1
   return {
     id: museumId,
     inviteCode: m.invite_code as string,
     visitCode: (m.visit_code as string | undefined) ?? undefined,
-    members: count ?? 1,
+    members: count,
+    partnerJoinedAt: rows.find((r) => r.role === 'partner')?.joined_at,
+    visitors: guests.length,
+    lastVisitAt: guests.map((g) => g.joined_at).sort().at(-1),
     userId: uid,
     role: (me?.role as CloudMuseum['role'] | undefined) ?? (m.owner_id === uid ? 'owner' : 'guest'),
     joinProblem,
